@@ -1,0 +1,9 @@
+{
+  "git_commit": "263d46e238849146a219967638a6090da9de38fe",
+  "inputs": {
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\contract_scopes.json": "0121a591cb2763a56cf0ce195dcd4c10389ab9e25c51ed711b155ee8f7b907b6",
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\events.json": "ab213eb9adb483b83fc47f508fde1050b24ac2cd4160dff47fd96b7de484d37b",
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\data\\raw\\event_candidates.csv": "a373bd1ed3128d95d838357797c82867d7d6d8aea75c8806597fafe887f18c7a"
+  },
+  "registry_version": "1.0"
+}

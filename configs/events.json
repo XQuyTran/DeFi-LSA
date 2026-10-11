@@ -1,0 +1,88 @@
+[
+  {
+    "attack_contracts": [
+      "0x036cec1a199234fc02f72d29e596a09440825f1c",
+      "0x0b812c74729b6abc723f22986c61d95344ff7aba",
+      "0xd3b7cea28feb5e537fca4e657e3f60129456eaf3"
+    ],
+    "attacker_addresses": [
+      "0xb2698c2d99ad2c302a95a8db26b08d17a77cedd4",
+      "0xb66cd966670d962c227b3eaba30a872dbfb995db"
+    ],
+    "block_number": 16818024,
+    "chain_id": 1,
+    "event_date_utc": "2023-03-13",
+    "event_id": "euler_2023-03-13",
+    "exploit_tx_hash": "0x47ac3527d02e6b9631c77fad1cdee7bfa77a8a7bfd4880dccbda5146ace4088f",
+    "feasibility_status": "GO",
+    "protocol": "Euler Finance",
+    "protocol_or_vulnerable_contracts": [
+      "0x27182842e098f60e3d576794a5bffb0777e025d3"
+    ],
+    "required_next_action": "Enumerate all Euler exploit tx hashes from attacker cluster and reconcile each asset leg before dataset freeze",
+    "tokens_related": [
+      "WETH",
+      "DAI",
+      "USDC",
+      "WBTC",
+      "wstETH"
+    ],
+    "tx_scope": "Representative confirmed exploit transaction, not the only transaction"
+  },
+  {
+    "attack_contracts": [],
+    "attacker_addresses": [
+      "0xb1c33b391c2569b737ec387e731e88589e8ec148",
+      "0xdce5d6b41c32f578f875efffc0d422c57a75d7d8",
+      "0x30fb95794a2051abe30a67892b3a1fa73947aee5",
+      "0x6ec21d1868743a44318c3c259a6d4953f9978538"
+    ],
+    "block_number": null,
+    "chain_id": 1,
+    "event_date_utc": "2023-07-30",
+    "event_id": "curve_vyper_2023-07-30",
+    "exploit_tx_hash": null,
+    "feasibility_status": "CONDITIONAL_GO",
+    "protocol": "Curve Finance Vyper reentrancy",
+    "protocol_or_vulnerable_contracts": [
+      "0x8301ae4fc9c624d1d396cbdaa1ed877821d7c511"
+    ],
+    "required_next_action": "Create curve_incident_legs.csv with one row per affected pool/actor, exact tx hash, block, pool address and role; do not run causal model until complete",
+    "tokens_related": [
+      "CRV",
+      "ETH/WETH",
+      "alETH",
+      "pETH",
+      "msETH"
+    ],
+    "tx_scope": "Multi-pool, multi-actor incident; no single canonical tx frozen in this audit"
+  },
+  {
+    "attack_contracts": [
+      "0xaf2acf3d4ab78e4c702256d214a3189a874cdc13"
+    ],
+    "attacker_addresses": [
+      "0x50275e0b7261559ce1644014d4b78d4aa63be836",
+      "0xc9b826bad20872eb29f9b1d8af4befe8460b50c6"
+    ],
+    "block_number": 18630392,
+    "chain_id": 1,
+    "event_date_utc": "2023-11-22",
+    "event_id": "kyberswap_elastic_2023-11-22",
+    "exploit_tx_hash": "0x485e08dc2b6a4b3aeadcb89c3d18a37666dc7d9424961a2091d6b3696792f0f3",
+    "feasibility_status": "GO_WITH_ETHEREUM_SCOPE",
+    "protocol": "KyberSwap Elastic",
+    "protocol_or_vulnerable_contracts": [
+      "0xfd7b111aa83b9b6f547e617c7601efd997f64703"
+    ],
+    "required_next_action": "Enumerate every Ethereum affected pool and exploit/front-run tx from block window; exclude non-Ethereum loss figures from outcome variables",
+    "tokens_related": [
+      "WETH",
+      "wstETH",
+      "USDC",
+      "USDT",
+      "WBTC and pool-specific paired assets"
+    ],
+    "tx_scope": "Representative Ethereum exploit transaction; incident spans multiple chains and transactions"
+  }
+]
