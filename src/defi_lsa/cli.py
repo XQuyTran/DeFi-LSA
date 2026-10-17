@@ -6,11 +6,14 @@ import argparse
 import json
 import uuid
 from pathlib import Path
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from .collectors import ADAPTER_VERSION, collect_source_manifest
 from .config import load_source_config
 from .observability import CollectionMetrics
 from .audit import build_d2_gate_report
+from .orchestration import CollectionContext
 from .registry import (
     build_contract_scope,
     candidates_as_dicts,
@@ -70,23 +73,119 @@ def _source_manifest_command(args: argparse.Namespace) -> int:
 
 def _connectivity_command(args: argparse.Namespace) -> int:
     config = load_source_config(args.config)
-    config.validate(require_rpc=args.source == "rpc")
-    print(json.dumps({"source": args.source, "status": "configured", "run_id": uuid.uuid4().hex}))
-    return 0
+    config.validate()
+    statuses: dict[str, str] = {}
+
+    def probe_http(name: str, url: str, *, headers: dict[str, str] | None = None) -> None:
+        try:
+            request = Request(url, headers=headers or {"Accept": "application/json"})
+            with urlopen(request, timeout=config.request_timeout_seconds) as response:
+                response.read(1)
+        except Exception as exc:
+            status = getattr(exc, "code", None)
+            statuses[name] = "authentication_error" if status in (401, 403) else "unreachable"
+        else:
+            statuses[name] = "reachable"
+
+    if args.source in ("rpc", "auto"):
+        if not config.ethereum_rpc_url:
+            statuses["ethereum_rpc"] = "authentication_error"
+        else:
+            payload = json.dumps(
+                {"jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": []}
+            ).encode("utf-8")
+            try:
+                request = Request(
+                    config.ethereum_rpc_url,
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=config.request_timeout_seconds) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+                if body.get("error") or body.get("result") != "0x1":
+                    statuses["ethereum_rpc"] = "unreachable"
+                else:
+                    statuses["ethereum_rpc"] = "reachable"
+            except Exception as exc:
+                status = getattr(exc, "code", None)
+                statuses["ethereum_rpc"] = "authentication_error" if status in (401, 403) else "unreachable"
+
+    if args.source in ("etherscan", "auto"):
+        query = urlencode(
+            {
+                "module": "contract",
+                "action": "getabi",
+                "address": "0x0000000000000000000000000000000000000000",
+                "chainid": config.etherscan_chain_id,
+                "apikey": config.etherscan_api_key,
+            }
+        )
+        probe_http("etherscan", f"{config.etherscan_api_url}?{query}")
+
+    if args.source in ("coingecko", "auto"):
+        headers = {"Accept": "application/json"}
+        if config.coingecko_api_key:
+            headers[config.coingecko_api_key_header] = config.coingecko_api_key
+        probe_http("coingecko", f"{config.coingecko_api_url.rstrip('/')}/ping", headers=headers)
+
+    if args.source in ("gdelt", "auto"):
+        probe_http("gdelt", f"{config.gdelt_doc_api_url}?query=ethereum&mode=artlist&format=json&maxrecords=1")
+
+    if args.source in ("aws", "auto"):
+        aws = config.aws_public_blockchain
+        bucket = aws.get("bucket", "aws-public-blockchain")
+        region = aws.get("region", "us-east-2")
+        probe_http(
+            "aws_public_blockchain",
+            f"https://{bucket}.s3.{region}.amazonaws.com/?list-type=2&prefix=v1.0/eth/&max-keys=1",
+        )
+
+    result = {"event": args.event, "run_id": uuid.uuid4().hex, "statuses": statuses}
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(result, sort_keys=True))
+    return 0 if all(status == "reachable" for status in statuses.values()) else 1
 
 
 def _collect_command(args: argparse.Namespace) -> int:
     config = load_source_config(args.config)
-    config.validate(require_rpc=args.source == "rpc")
+    config.validate()
     metrics = CollectionMetrics(event_id=args.event, collector=args.stage)
     if args.dry_run:
         print(json.dumps({"run_id": metrics.run_id, "event_id": args.event, "stage": args.stage,
                           "source": args.source, "dry_run": True}, sort_keys=True))
         return 0
-    summary = args.output / args.event / f"{metrics.run_id}.json"
-    metrics.write_summary(summary)
-    print(f"Collection run {metrics.run_id} completed; orchestration artifacts are ready")
-    return 0
+    context = None
+    try:
+        context = CollectionContext.from_files(
+            args.event,
+            events_path=_default_root() / "configs" / "events.json",
+            source_config=config,
+            output_root=args.output,
+            resume=args.resume,
+        )
+        if args.stage != "logs":
+            raise ValueError(f"collection stage is not implemented: {args.stage}")
+        if args.source not in ("rpc", "auto"):
+            raise ValueError("the logs stage requires --source rpc or --source auto")
+        result = context.collect_logs()
+        metrics.run_id = context.run_id
+        metrics.records_written = result.records_written
+        metrics.records_skipped = result.records_skipped
+        summary = args.output / args.event / f"{context.run_id}.json"
+        metrics.write_summary(summary)
+        print(json.dumps({"run_id": context.run_id, "status": "completed", "records_written": result.records_written,
+                          "records_skipped": result.records_skipped}, sort_keys=True))
+        return 0
+    except Exception as exc:
+        metrics.record_error(exc, stage=args.stage, source=args.source)
+        summary_event = context.event_id if context is not None else args.event
+        summary = args.output / summary_event / f"{metrics.run_id}.json"
+        metrics.write_summary(summary)
+        print(json.dumps({"run_id": metrics.run_id, "status": "failed", "error": str(exc)}, sort_keys=True))
+        return 1
 
 
 def _audit_command(args: argparse.Namespace) -> int:
@@ -151,8 +250,14 @@ def build_parser() -> argparse.ArgumentParser:
     source_manifest.set_defaults(handler=_source_manifest_command)
 
     connectivity = subparsers.add_parser("connectivity", help="validate source connectivity configuration")
-    connectivity.add_argument("--source", choices=("rpc", "aws", "coingecko", "gdelt"), default="rpc")
+    connectivity.add_argument("--event")
+    connectivity.add_argument(
+        "--source",
+        choices=("rpc", "etherscan", "coingecko", "gdelt", "aws", "auto"),
+        default="rpc",
+    )
     connectivity.add_argument("--config", type=Path)
+    connectivity.add_argument("--output", type=Path)
     connectivity.set_defaults(handler=_connectivity_command)
 
     collect = subparsers.add_parser("collect", help="start or resume a collection run")

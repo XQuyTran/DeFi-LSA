@@ -1,0 +1,77 @@
+{
+  "ethereum": {
+    "chain_id": 1,
+    "rpc": {
+      "url_env": "ETH_RPC_URL",
+      "request_timeout_seconds": 30,
+      "maximum_attempts": 5,
+      "requests_per_second": 2.0
+    }
+  },
+  "aws_public_blockchain": {
+    "enabled": true,
+    "region": "us-east-2",
+    "bucket": "aws-public-blockchain",
+    "ethereum_root": "s3://aws-public-blockchain/v1.0/eth/",
+    "anonymous": true,
+    "tables": {
+      "blocks": "blocks/date={YYYY-MM-DD}/",
+      "transactions": "transactions/date={YYYY-MM-DD}/",
+      "logs": "logs/date={YYYY-MM-DD}/",
+      "token_transfers": "token_transfers/date={YYYY-MM-DD}/",
+      "traces": "traces/date={YYYY-MM-DD}/",
+      "contracts": "contracts/date={YYYY-MM-DD}/"
+    }
+  },
+  "etherscan": {
+    "enabled": true,
+    "base_url": "https://api.etherscan.io/v2/api",
+    "chain_id": 1,
+    "api_key_env": "ETHERSCAN_API_KEY",
+    "requests_per_second": 2.5,
+    "abi_action": {
+      "module": "contract",
+      "action": "getabi"
+    },
+    "source_action": {
+      "module": "contract",
+      "action": "getsourcecode"
+    }
+  },
+  "coingecko": {
+    "enabled": true,
+    "base_url": "https://api.coingecko.com/api/v3",
+    "api_key_env": "COINGECKO_API_KEY",
+    "api_key_header": "x-cg-demo-api-key",
+    "allow_keyless": true,
+    "market_chart_range_path": "/coins/{coin_id}/market_chart/range",
+    "requests_per_minute_keyless": 10
+  },
+  "gdelt": {
+    "enabled": true,
+    "doc_api_url": "https://api.gdeltproject.org/api/v2/doc/doc",
+    "format": "json",
+    "mode": "artlist"
+  },
+  "forums": {
+    "use_public_json_first": true,
+    "discourse_topic_template": "{base_url}/t/{topic_id}.json",
+    "discourse_search_template": "{base_url}/search.json?q={query}&page={page}"
+  },
+  "source_priority": {
+    "blocks": ["aws_public_blockchain", "ethereum_rpc"],
+    "transactions": ["aws_public_blockchain", "ethereum_rpc"],
+    "logs": ["aws_public_blockchain", "ethereum_rpc"],
+    "receipts": ["ethereum_rpc", "etherscan"],
+    "abi": ["etherscan", "local_cache", "protocol_repository"],
+    "prices": ["coingecko", "onchain_pool", "chainlink"],
+    "public_information": ["official_protocol", "discourse", "gdelt"]
+  },
+  "collection": {
+    "initial_log_chunk_size": 2000,
+    "minimum_log_chunk_size": 10,
+    "maximum_log_chunk_size": 20000,
+    "raw_version": "v1",
+    "output_root": "/kaggle/working/defi-lsa-output"
+  }
+}
