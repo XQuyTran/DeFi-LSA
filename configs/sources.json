@@ -64,7 +64,7 @@
     "logs": ["aws_public_blockchain", "ethereum_rpc"],
     "receipts": ["ethereum_rpc", "etherscan"],
     "abi": ["etherscan", "local_cache", "protocol_repository"],
-    "prices": ["coingecko", "onchain_pool", "chainlink"],
+    "prices": ["chainlink", "onchain_pool", "coingecko"],
     "public_information": ["official_protocol", "discourse", "gdelt"]
   },
   "collection": {
