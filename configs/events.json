@@ -27,7 +27,9 @@
       "WBTC",
       "wstETH"
     ],
-    "tx_scope": "Representative confirmed exploit transaction, not the only transaction"
+    "tx_scope": "Representative confirmed exploit transaction, not the only transaction",
+    "start_block": 16818024,
+    "end_block": 16818024
   },
   {
     "attack_contracts": [],
