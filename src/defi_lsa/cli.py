@@ -18,6 +18,8 @@ from .registry import (
     build_contract_scope,
     candidates_as_dicts,
     load_event_candidates,
+    load_incident_legs,
+    validate_executable_candidates,
     write_registry_manifest,
 )
 
@@ -28,7 +30,13 @@ def _default_root() -> Path:
 
 def _registry_command(args: argparse.Namespace) -> int:
     candidates = load_event_candidates(args.input)
-    scopes = [build_contract_scope(candidate) for candidate in candidates]
+    incident_legs = (
+        load_incident_legs(args.incident_legs)
+        if args.incident_legs.exists()
+        else []
+    )
+    validate_executable_candidates(candidates, incident_legs)
+    scopes = [build_contract_scope(candidate, incident_legs) for candidate in candidates]
     args.events_output.parent.mkdir(parents=True, exist_ok=True)
     args.events_output.write_text(
         json.dumps(candidates_as_dicts(candidates), indent=2, sort_keys=True) + "\n",
@@ -41,7 +49,12 @@ def _registry_command(args: argparse.Namespace) -> int:
     )
     write_registry_manifest(
         args.manifest_output,
-        [args.input, args.events_output, args.scope_output],
+        [
+            args.input,
+            args.events_output,
+            args.scope_output,
+            *([args.incident_legs] if args.incident_legs.exists() else []),
+        ],
     )
     print(f"Validated {len(candidates)} event candidates")
     print(f"Wrote contract scopes to {args.scope_output}")
@@ -223,6 +236,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--manifest-output",
         type=Path,
         default=root / "configs" / "registry_manifest.json",
+    )
+    registry.add_argument(
+        "--incident-legs",
+        type=Path,
+        default=root / "configs" / "incident_legs.json",
     )
     registry.set_defaults(handler=_registry_command)
 

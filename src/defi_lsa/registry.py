@@ -10,12 +10,13 @@ import subprocess
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
-from .identifiers import normalize_address
+from .identifiers import normalize_address, normalize_utc_timestamp
 
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
+EXECUTABLE_STATUSES = frozenset({"GO", "GO_WITH_ETHEREUM_SCOPE"})
 REQUIRED_COLUMNS = {
     "event_id",
     "protocol",
@@ -36,6 +37,10 @@ class EventCandidate:
     protocol: str
     chain_id: int
     event_date_utc: str
+    collection_start_utc: str | None
+    collection_end_utc: str | None
+    start_block: int | None
+    end_block: int | None
     block_number: int | None
     exploit_tx_hash: str | None
     tx_scope: str
@@ -45,6 +50,22 @@ class EventCandidate:
     tokens_related: tuple[str, ...]
     feasibility_status: str
     required_next_action: str
+
+
+@dataclass(frozen=True)
+class IncidentLeg:
+    """One verified pool/transaction/actor leg in an incident registry."""
+
+    leg_id: str
+    event_id: str
+    chain_id: int
+    affected_address: str
+    asset_pair: str
+    transaction_hash: str
+    block_number: int
+    actor_address: str
+    role: str
+    evidence_urls: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -74,6 +95,11 @@ def _parse_optional_int(value: str) -> int | None:
     return int(value) if value else None
 
 
+def _parse_optional_timestamp(value: str) -> str | None:
+    value = value.strip()
+    return normalize_utc_timestamp(value) if value else None
+
+
 def _parse_optional_hash(value: str) -> str | None:
     value = value.strip().lower()
     return value or None
@@ -99,6 +125,14 @@ def load_event_candidates(path: Path) -> list[EventCandidate]:
                 protocol=row["protocol"].strip(),
                 chain_id=int(row["chain_id"]),
                 event_date_utc=_parse_date(row["event_date_utc"]),
+                collection_start_utc=_parse_optional_timestamp(
+                    row.get("collection_start_utc", "")
+                ),
+                collection_end_utc=_parse_optional_timestamp(
+                    row.get("collection_end_utc", "")
+                ),
+                start_block=_parse_optional_int(row.get("start_block", "")),
+                end_block=_parse_optional_int(row.get("end_block", "")),
                 block_number=_parse_optional_int(row["block_number"]),
                 exploit_tx_hash=_parse_optional_hash(row["exploit_tx_hash"]),
                 tx_scope=row["tx_scope"].strip(),
@@ -121,6 +155,41 @@ def load_event_candidates(path: Path) -> list[EventCandidate]:
     return candidates
 
 
+def load_incident_legs(path: Path) -> list[IncidentLeg]:
+    """Load structured incident legs without silently accepting partial rows."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("incident-leg registry must be a JSON array")
+
+    legs: list[IncidentLeg] = []
+    for item in payload:
+        if not isinstance(item, Mapping):
+            raise ValueError("each incident leg must be a JSON object")
+        evidence = item.get("evidence_urls", [])
+        if not isinstance(evidence, list) or not all(
+            isinstance(value, str) and value.strip() for value in evidence
+        ):
+            raise ValueError("incident-leg evidence_urls must be a list of URLs")
+        legs.append(
+            IncidentLeg(
+                leg_id=str(item.get("leg_id", "")).strip(),
+                event_id=str(item.get("event_id", "")).strip(),
+                chain_id=int(item.get("chain_id", 0)),
+                affected_address=normalize_address(
+                    str(item.get("affected_address", ""))
+                ),
+                asset_pair=str(item.get("asset_pair", "")).strip(),
+                transaction_hash=str(item.get("transaction_hash", "")).strip().lower(),
+                block_number=int(item.get("block_number", -1)),
+                actor_address=normalize_address(str(item.get("actor_address", ""))),
+                role=str(item.get("role", "")).strip().lower(),
+                evidence_urls=tuple(value.strip() for value in evidence),
+            )
+        )
+    validate_incident_legs(legs)
+    return legs
+
+
 def validate_candidates(candidates: Iterable[EventCandidate]) -> None:
     """Enforce registry invariants and report every invalid candidate."""
     candidates = list(candidates)
@@ -135,6 +204,26 @@ def validate_candidates(candidates: Iterable[EventCandidate]) -> None:
             errors.append("event_id must not be empty")
         if candidate.chain_id <= 0:
             errors.append(f"{candidate.event_id}: chain_id must be positive")
+        if (candidate.collection_start_utc is None) != (
+            candidate.collection_end_utc is None
+        ):
+            errors.append(
+                f"{candidate.event_id}: collection_start_utc and collection_end_utc "
+                "must be provided together"
+            )
+        if candidate.collection_start_utc and candidate.collection_end_utc:
+            if candidate.collection_end_utc < candidate.collection_start_utc:
+                errors.append(
+                    f"{candidate.event_id}: collection_end_utc must not precede "
+                    "collection_start_utc"
+                )
+        if (candidate.start_block is None) != (candidate.end_block is None):
+            errors.append(
+                f"{candidate.event_id}: start_block and end_block must be provided together"
+            )
+        if candidate.start_block is not None and candidate.end_block is not None:
+            if candidate.start_block < 0 or candidate.end_block < candidate.start_block:
+                errors.append(f"{candidate.event_id}: invalid collection block window")
         for field_name, addresses in (
             ("protocol contracts", candidate.protocol_or_vulnerable_contracts),
             ("attack contracts", candidate.attack_contracts),
@@ -150,13 +239,93 @@ def validate_candidates(candidates: Iterable[EventCandidate]) -> None:
         raise ValueError("; ".join(errors))
 
 
-def build_contract_scope(candidate: EventCandidate) -> ContractScope:
+def validate_incident_legs(legs: Iterable[IncidentLeg]) -> None:
+    """Validate one-to-one ownership of registered incident transactions."""
+    legs = list(legs)
+    errors: list[str] = []
+    leg_ids = [leg.leg_id for leg in legs]
+    transaction_hashes = [leg.transaction_hash for leg in legs]
+    if any(not value for value in leg_ids):
+        errors.append("incident leg IDs must not be empty")
+    if len(set(leg_ids)) != len(leg_ids):
+        errors.append("incident leg IDs must be unique")
+    if len(set(transaction_hashes)) != len(transaction_hashes):
+        errors.append("each registered transaction must belong to one incident leg")
+
+    allowed_roles = {"attacker", "front_runner", "mev", "white_hat", "recovery", "victim"}
+    for leg in legs:
+        if leg.chain_id != 1:
+            errors.append(f"{leg.leg_id}: only Ethereum chain ID 1 is supported")
+        if not ADDRESS_RE.fullmatch(leg.affected_address):
+            errors.append(f"{leg.leg_id}: invalid affected address")
+        if not HASH_RE.fullmatch(leg.transaction_hash):
+            errors.append(f"{leg.leg_id}: invalid transaction hash")
+        if leg.block_number < 0:
+            errors.append(f"{leg.leg_id}: block_number must be non-negative")
+        if not ADDRESS_RE.fullmatch(leg.actor_address):
+            errors.append(f"{leg.leg_id}: invalid actor address")
+        if leg.role not in allowed_roles:
+            errors.append(f"{leg.leg_id}: unsupported actor role {leg.role!r}")
+        if not leg.asset_pair:
+            errors.append(f"{leg.leg_id}: asset_pair must not be empty")
+        if not leg.evidence_urls:
+            errors.append(f"{leg.leg_id}: at least one evidence URL is required")
+
+    if errors:
+        raise ValueError("; ".join(errors))
+
+
+def validate_executable_candidates(
+    candidates: Iterable[EventCandidate],
+    incident_legs: Iterable[IncidentLeg] = (),
+) -> None:
+    """Prevent executable events from being materialized without frozen inputs."""
+    candidates = list(candidates)
+    legs_by_event: dict[str, list[IncidentLeg]] = {}
+    for leg in incident_legs:
+        legs_by_event.setdefault(leg.event_id, []).append(leg)
+
+    errors: list[str] = []
+    for candidate in candidates:
+        if candidate.feasibility_status not in EXECUTABLE_STATUSES:
+            continue
+        missing = [
+            name
+            for name, value in (
+                ("collection_start_utc", candidate.collection_start_utc),
+                ("collection_end_utc", candidate.collection_end_utc),
+                ("start_block", candidate.start_block),
+                ("end_block", candidate.end_block),
+            )
+            if value is None
+        ]
+        if missing:
+            errors.append(
+                f"{candidate.event_id}: executable status requires frozen fields "
+                f"{sorted(missing)}"
+            )
+        if not legs_by_event.get(candidate.event_id):
+            errors.append(f"{candidate.event_id}: executable status requires incident legs")
+
+    if errors:
+        raise ValueError("; ".join(errors))
+
+
+def build_contract_scope(
+    candidate: EventCandidate,
+    incident_legs: Iterable[IncidentLeg] = (),
+) -> ContractScope:
     """Build the contract-centric D2 collection boundary for one event."""
     addresses = tuple(
         sorted(
             set(candidate.protocol_or_vulnerable_contracts)
             | set(candidate.attack_contracts)
             | set(candidate.attacker_addresses)
+            | {
+                leg.affected_address
+                for leg in incident_legs
+                if leg.event_id == candidate.event_id
+            }
         )
     )
     if not addresses:

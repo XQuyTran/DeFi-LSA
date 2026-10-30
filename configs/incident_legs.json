@@ -1,0 +1,32 @@
+[
+  {
+    "leg_id": "euler-weth-representative",
+    "event_id": "euler_2023-03-13",
+    "chain_id": 1,
+    "affected_address": "0x27182842e098f60e3d576794a5bffb0777e025d3",
+    "asset_pair": "WETH/DAI",
+    "transaction_hash": "0x47ac3527d02e6b9631c77fad1cdee7bfa77a8a7bfd4880dccbda5146ace4088f",
+    "block_number": 16818024,
+    "actor_address": "0xb2698c2d99ad2c302a95a8db26b08d17a77cedd4",
+    "role": "attacker",
+    "evidence_urls": [
+      "https://etherscan.io/tx/0x47ac3527d02e6b9631c77fad1cdee7bfa77a8a7bfd4880dccbda5146ace4088f",
+      "https://www.zellic.io/blog/euler-finance-exploit-analysis/"
+    ]
+  },
+  {
+    "leg_id": "kyberswap-ethereum-representative",
+    "event_id": "kyberswap_elastic_2023-11-22",
+    "chain_id": 1,
+    "affected_address": "0xfd7b111aa83b9b6f547e617c7601efd997f64703",
+    "asset_pair": "WETH/ETHEREUM-POOL-ASSETS",
+    "transaction_hash": "0x485e08dc2b6a4b3aeadcb89c3d18a37666dc7d9424961a2091d6b3696792f0f3",
+    "block_number": 18630392,
+    "actor_address": "0x50275e0b7261559ce1644014d4b78d4aa63be836",
+    "role": "attacker",
+    "evidence_urls": [
+      "https://etherscan.io/tx/0x485e08dc2b6a4b3aeadcb89c3d18a37666dc7d9424961a2091d6b3696792f0f3",
+      "https://blog.kyberswap.com/post-mortem-kyberswap-elastic-exploit/"
+    ]
+  }
+]
