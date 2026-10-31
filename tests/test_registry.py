@@ -1,5 +1,6 @@
 import json
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from defi_lsa.registry import (
@@ -7,6 +8,8 @@ from defi_lsa.registry import (
     build_contract_scope,
     load_event_candidates,
     load_incident_legs,
+    load_public_source_registry,
+    load_token_registry,
     validate_executable_candidates,
     validate_incident_legs,
 )
@@ -39,10 +42,17 @@ class RegistryTests(unittest.TestCase):
 
     def test_event_model_preserves_optional_collection_fields(self) -> None:
         candidate = load_event_candidates(CSV_PATH)[0]
-        self.assertIsNone(candidate.collection_start_utc)
-        self.assertIsNone(candidate.collection_end_utc)
-        self.assertIsNone(candidate.start_block)
-        self.assertIsNone(candidate.end_block)
+        self.assertEqual(candidate.collection_start_utc, "2023-03-13T08:56:35Z")
+        self.assertEqual(candidate.collection_end_utc, "2023-03-13T08:56:35Z")
+        self.assertEqual(candidate.start_block, 16818024)
+        self.assertEqual(candidate.end_block, 16818024)
+
+    def test_metadata_registries_are_valid(self) -> None:
+        self.assertGreater(len(load_token_registry(ROOT / "configs" / "tokens.json")), 0)
+        self.assertEqual(
+            len(load_public_source_registry(ROOT / "configs" / "public_sources.json")),
+            3,
+        )
 
     def test_incident_leg_address_is_added_to_contract_scope(self) -> None:
         candidate = load_event_candidates(CSV_PATH)[0]
@@ -83,10 +93,16 @@ class RegistryTests(unittest.TestCase):
             path.unlink(missing_ok=True)
 
     def test_executable_events_require_frozen_windows(self) -> None:
-        candidates = load_event_candidates(CSV_PATH)
+        candidate = replace(
+            load_event_candidates(CSV_PATH)[0],
+            collection_start_utc=None,
+            collection_end_utc=None,
+            start_block=None,
+            end_block=None,
+        )
         legs = load_incident_legs(ROOT / "configs" / "incident_legs.json")
         with self.assertRaisesRegex(ValueError, "frozen fields"):
-            validate_executable_candidates(candidates, legs)
+            validate_executable_candidates([candidate], legs)
 
     def test_conditional_events_may_remain_unfrozen(self) -> None:
         candidate = load_event_candidates(CSV_PATH)[1]

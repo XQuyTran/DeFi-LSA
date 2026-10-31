@@ -1,0 +1,32 @@
+[
+  {
+    "event_id":"euler_2023-03-13",
+    "official_urls":["https://www.euler.finance/blog/war-peace-behind-the-scenes-of-eulers-240m-exploit-recovery","https://forum.euler.finance/"],
+    "topic_ids":[],
+    "search_queries":["Euler Finance exploit March 2023"],
+    "gdelt_aliases":["Euler Finance"],
+    "keywords":["Euler","exploit","recovery"],
+    "allowed_domains":["euler.finance","forum.euler.finance","zellic.io"],
+    "collection_window":{"start_utc":"2023-03-13T08:56:35Z","end_utc":"2023-03-13T08:56:35Z"}
+  },
+  {
+    "event_id":"curve_vyper_2023-07-30",
+    "official_urls":["https://www.curve.finance/","https://gov.curve.finance/"],
+    "topic_ids":[],
+    "search_queries":["Curve Vyper reentrancy July 2023"],
+    "gdelt_aliases":["Curve Finance","Vyper reentrancy"],
+    "keywords":["Curve","Vyper","reentrancy","CRV","alETH","pETH","msETH"],
+    "allowed_domains":["curve.finance","gov.curve.finance","hackmd.io","chainalysis.com","anchain.ai"],
+    "collection_window":{"start_utc":"2023-07-30T13:10:00Z","end_utc":"2023-07-30T22:00:00Z"}
+  },
+  {
+    "event_id":"kyberswap_elastic_2023-11-22",
+    "official_urls":["https://gov.kyber.org/","https://blog.kyberswap.com/post-mortem-kyberswap-elastic-exploit/"],
+    "topic_ids":[],
+    "search_queries":["KyberSwap Elastic exploit November 2023"],
+    "gdelt_aliases":["KyberSwap Elastic"],
+    "keywords":["KyberSwap","Elastic","exploit","front-run"],
+    "allowed_domains":["kyber.org","kyberswap.com","certik.com","blocksec.com","sharkteam.org"],
+    "collection_window":{"start_utc":"2023-11-22T22:55:11Z","end_utc":"2023-11-22T22:55:11Z"}
+  }
+]

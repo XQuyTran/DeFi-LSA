@@ -19,6 +19,8 @@ from .registry import (
     candidates_as_dicts,
     load_event_candidates,
     load_incident_legs,
+    load_public_source_registry,
+    load_token_registry,
     validate_executable_candidates,
     write_registry_manifest,
 )
@@ -36,6 +38,8 @@ def _registry_command(args: argparse.Namespace) -> int:
         else []
     )
     validate_executable_candidates(candidates, incident_legs)
+    load_token_registry(args.tokens)
+    load_public_source_registry(args.public_sources)
     scopes = [build_contract_scope(candidate, incident_legs) for candidate in candidates]
     args.events_output.parent.mkdir(parents=True, exist_ok=True)
     args.events_output.write_text(
@@ -54,6 +58,8 @@ def _registry_command(args: argparse.Namespace) -> int:
             args.events_output,
             args.scope_output,
             *([args.incident_legs] if args.incident_legs.exists() else []),
+            args.tokens,
+            args.public_sources,
         ],
     )
     print(f"Validated {len(candidates)} event candidates")
@@ -241,6 +247,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--incident-legs",
         type=Path,
         default=root / "configs" / "incident_legs.json",
+    )
+    registry.add_argument("--tokens", type=Path, default=root / "configs" / "tokens.json")
+    registry.add_argument(
+        "--public-sources", type=Path, default=root / "configs" / "public_sources.json"
     )
     registry.set_defaults(handler=_registry_command)
 

@@ -11,6 +11,9 @@
     ],
     "block_number": 16818024,
     "chain_id": 1,
+    "collection_end_utc": "2023-03-13T08:56:35Z",
+    "collection_start_utc": "2023-03-13T08:56:35Z",
+    "end_block": 16818024,
     "event_date_utc": "2023-03-13",
     "event_id": "euler_2023-03-13",
     "exploit_tx_hash": "0x47ac3527d02e6b9631c77fad1cdee7bfa77a8a7bfd4880dccbda5146ace4088f",
@@ -20,6 +23,7 @@
       "0x27182842e098f60e3d576794a5bffb0777e025d3"
     ],
     "required_next_action": "Enumerate all Euler exploit tx hashes from attacker cluster and reconcile each asset leg before dataset freeze",
+    "start_block": 16818024,
     "tokens_related": [
       "WETH",
       "DAI",
@@ -27,9 +31,7 @@
       "WBTC",
       "wstETH"
     ],
-    "tx_scope": "Representative confirmed exploit transaction, not the only transaction",
-    "start_block": 16818024,
-    "end_block": 16818024
+    "tx_scope": "Representative confirmed exploit transaction, not the only transaction"
   },
   {
     "attack_contracts": [],
@@ -41,6 +43,9 @@
     ],
     "block_number": null,
     "chain_id": 1,
+    "collection_end_utc": null,
+    "collection_start_utc": null,
+    "end_block": null,
     "event_date_utc": "2023-07-30",
     "event_id": "curve_vyper_2023-07-30",
     "exploit_tx_hash": null,
@@ -50,6 +55,7 @@
       "0x8301ae4fc9c624d1d396cbdaa1ed877821d7c511"
     ],
     "required_next_action": "Create curve_incident_legs.csv with one row per affected pool/actor, exact tx hash, block, pool address and role; do not run causal model until complete",
+    "start_block": null,
     "tokens_related": [
       "CRV",
       "ETH/WETH",
@@ -69,6 +75,9 @@
     ],
     "block_number": 18630392,
     "chain_id": 1,
+    "collection_end_utc": "2023-11-22T22:55:11Z",
+    "collection_start_utc": "2023-11-22T22:55:11Z",
+    "end_block": 18630392,
     "event_date_utc": "2023-11-22",
     "event_id": "kyberswap_elastic_2023-11-22",
     "exploit_tx_hash": "0x485e08dc2b6a4b3aeadcb89c3d18a37666dc7d9424961a2091d6b3696792f0f3",
@@ -78,6 +87,7 @@
       "0xfd7b111aa83b9b6f547e617c7601efd997f64703"
     ],
     "required_next_action": "Enumerate every Ethereum affected pool and exploit/front-run tx from block window; exclude non-Ethereum loss figures from outcome variables",
+    "start_block": 18630392,
     "tokens_related": [
       "WETH",
       "wstETH",

@@ -17,6 +17,7 @@ from .identifiers import normalize_address, normalize_utc_timestamp
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 EXECUTABLE_STATUSES = frozenset({"GO", "GO_WITH_ETHEREUM_SCOPE"})
+TOKEN_REQUIRED_FIELDS = frozenset({"symbol", "chain_id", "address", "decimals", "coingecko_id", "fallback_price_source", "status"})
 REQUIRED_COLUMNS = {
     "event_id",
     "protocol",
@@ -113,14 +114,23 @@ def _parse_date(value: str) -> str:
 def load_event_candidates(path: Path) -> list[EventCandidate]:
     """Load and validate the candidate CSV without mutating source data."""
     with path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        columns = set(reader.fieldnames or ())
+        reader = csv.reader(handle)
+        fieldnames = next(reader, [])
+        columns = set(fieldnames)
         missing = REQUIRED_COLUMNS - columns
         if missing:
             raise ValueError(f"Missing required candidate columns: {sorted(missing)}")
 
-        candidates = [
-            EventCandidate(
+        candidates: list[EventCandidate] = []
+        for values in reader:
+            if len(values) == len(fieldnames) - 4:
+                values = values[:5] + ["", "", "", ""] + values[5:]
+            if len(values) != len(fieldnames):
+                raise ValueError(
+                    f"candidate row has {len(values)} fields; expected {len(fieldnames)}"
+                )
+            row = dict(zip(fieldnames, values))
+            candidates.append(EventCandidate(
                 event_id=row["event_id"].strip(),
                 protocol=row["protocol"].strip(),
                 chain_id=int(row["chain_id"]),
@@ -148,9 +158,7 @@ def load_event_candidates(path: Path) -> list[EventCandidate]:
                 ),
                 feasibility_status=row["feasibility_status"].strip(),
                 required_next_action=row["required_next_action"].strip(),
-            )
-            for row in reader
-        ]
+            ))
     validate_candidates(candidates)
     return candidates
 
@@ -188,6 +196,63 @@ def load_incident_legs(path: Path) -> list[IncidentLeg]:
         )
     validate_incident_legs(legs)
     return legs
+
+
+def load_token_registry(path: Path) -> list[dict[str, Any]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("token registry must be a JSON array")
+    validate_token_registry(payload)
+    return payload
+
+
+def validate_token_registry(tokens: Iterable[Mapping[str, Any]]) -> None:
+    errors: list[str] = []
+    symbols: set[str] = set()
+    for token in tokens:
+        missing = TOKEN_REQUIRED_FIELDS - set(token)
+        symbol = str(token.get("symbol", "")).strip()
+        if missing:
+            errors.append(f"{symbol or '<unknown>'}: missing token fields {sorted(missing)}")
+            continue
+        if symbol in symbols:
+            errors.append(f"duplicate token symbol: {symbol}")
+        symbols.add(symbol)
+        if int(token["chain_id"]) != 1:
+            errors.append(f"{symbol}: only Ethereum chain ID 1 is supported")
+        if token["status"] == "verified":
+            if not isinstance(token["address"], str) or not ADDRESS_RE.fullmatch(token["address"]):
+                errors.append(f"{symbol}: verified token requires an Ethereum address")
+            if not isinstance(token["decimals"], int) or not 0 <= token["decimals"] <= 36:
+                errors.append(f"{symbol}: invalid decimals")
+        elif token["status"] != "pending":
+            errors.append(f"{symbol}: status must be verified or pending")
+    if errors:
+        raise ValueError("; ".join(errors))
+
+
+def load_public_source_registry(path: Path) -> list[dict[str, Any]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("public-source registry must be a JSON array")
+    validate_public_source_registry(payload)
+    return payload
+
+
+def validate_public_source_registry(sources: Iterable[Mapping[str, Any]]) -> None:
+    errors: list[str] = []
+    for source in sources:
+        event_id = str(source.get("event_id", "")).strip()
+        if not event_id or not source.get("allowed_domains") or not source.get("collection_window"):
+            errors.append(f"{event_id or '<unknown>'}: source requires event_id, allowed_domains, and collection_window")
+        window = source.get("collection_window", {})
+        if isinstance(window, Mapping):
+            start = window.get("start_utc")
+            end = window.get("end_utc")
+            if (start is None) != (end is None) or (start and end and str(end) < str(start)):
+                errors.append(f"{event_id}: invalid public-source collection window")
+    if errors:
+        raise ValueError("; ".join(errors))
 
 
 def validate_candidates(candidates: Iterable[EventCandidate]) -> None:
