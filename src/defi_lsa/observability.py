@@ -9,6 +9,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .retry import redact_credentials
+
+
+def _redact_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact_credentials(value)
+    if isinstance(value, dict):
+        return {key: _redact_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_value(item) for item in value)
+    return value
+
 
 @dataclass
 class CollectionMetrics:
@@ -32,8 +46,8 @@ class CollectionMetrics:
         self.requests_failed += 1
         self.errors.append({
             "type": type(error).__name__,
-            "message": str(error),
-            **context,
+            "message": redact_credentials(str(error)),
+            **_redact_value(context),
         })
 
     def write_summary(self, path: Path) -> None:

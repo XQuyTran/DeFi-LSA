@@ -9,6 +9,21 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+_PRIORITY_SOURCE_NAMES = {
+    "aws_public_blockchain",
+    "ethereum_rpc",
+    "etherscan",
+    "local_cache",
+    "protocol_repository",
+    "chainlink",
+    "onchain_pool",
+    "coingecko",
+    "official_protocol",
+    "discourse",
+    "gdelt",
+}
+
+
 @dataclass(frozen=True)
 class SourceConfig:
     ethereum_rpc_url: str = ""
@@ -21,6 +36,7 @@ class SourceConfig:
     gdelt_doc_api_url: str = "https://api.gdeltproject.org/api/v2/doc/doc"
     forums: Mapping[str, Any] = field(default_factory=dict)
     aws_public_blockchain: Mapping[str, Any] = field(default_factory=dict)
+    enabled_sources: Mapping[str, bool] = field(default_factory=dict)
     source_priority: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     output_root: str = ""
     gdelt_enabled: bool = True
@@ -34,6 +50,14 @@ class SourceConfig:
     def validate(self, require_rpc: bool = False) -> None:
         if require_rpc and not self.ethereum_rpc_url:
             raise ValueError("ETH_RPC_URL is required for RPC collection")
+        for field_name, value in (
+            ("forums", self.forums),
+            ("aws_public_blockchain", self.aws_public_blockchain),
+            ("enabled_sources", self.enabled_sources),
+            ("source_priority", self.source_priority),
+        ):
+            if not isinstance(value, Mapping):
+                raise ValueError(f"{field_name} must be a mapping")
         if self.etherscan_chain_id != 1:
             raise ValueError("only Ethereum mainnet (chain ID 1) is supported")
         if self.request_timeout_seconds <= 0 or self.maximum_attempts < 1:
@@ -46,6 +70,77 @@ class SourceConfig:
             <= self.maximum_log_chunk_size
         ):
             raise ValueError("log chunk sizes must be min <= initial <= max")
+        for source_name, source_order in self.source_priority.items():
+            if not source_name.strip():
+                raise ValueError("source priority artifact names must not be blank")
+            if not isinstance(source_order, (tuple, list)):
+                raise ValueError(f"source priority for {source_name} must be a sequence")
+            if not source_order or any(not source.strip() for source in source_order):
+                raise ValueError(f"source priority for {source_name} must not be blank")
+            if len(set(source_order)) != len(source_order):
+                raise ValueError(f"source priority for {source_name} contains duplicates")
+            unknown = set(source_order) - _PRIORITY_SOURCE_NAMES
+            if unknown:
+                raise ValueError(
+                    f"source priority for {source_name} contains unknown sources: "
+                    + ", ".join(sorted(unknown))
+                )
+        if self.etherscan_api_url and not self.etherscan_api_url.startswith(("http://", "https://")):
+            raise ValueError("etherscan_api_url must be an HTTP(S) URL")
+        if self.coingecko_api_url and not self.coingecko_api_url.startswith(("http://", "https://")):
+            raise ValueError("coingecko_api_url must be an HTTP(S) URL")
+        if self.gdelt_enabled and not self.gdelt_doc_api_url.startswith(("http://", "https://")):
+            raise ValueError("gdelt_doc_api_url must be an HTTP(S) URL")
+        self._validate_nested_sources()
+
+        if any(not isinstance(value, bool) for value in self.enabled_sources.values()):
+            raise ValueError("enabled_sources values must be boolean")
+
+    def _validate_nested_sources(self) -> None:
+        aws = self.aws_public_blockchain
+        if aws:
+            if not isinstance(aws.get("enabled", True), bool):
+                raise ValueError("aws_public_blockchain.enabled must be boolean")
+            for key in ("bucket", "region"):
+                if not isinstance(aws.get(key), str) or not aws[key].strip():
+                    raise ValueError(f"aws_public_blockchain.{key} is required")
+            tables = aws.get("tables", {})
+            if not isinstance(tables, Mapping) or not tables:
+                raise ValueError("aws_public_blockchain.tables must be a non-empty mapping")
+        forums = self.forums
+        if forums:
+            for key in ("discourse_topic_template", "discourse_search_template"):
+                if key in forums and not isinstance(forums[key], str):
+                    raise ValueError(f"forums.{key} must be a string")
+            for key in ("probe_url", "base_url"):
+                if key in forums and forums[key] and not str(forums[key]).startswith(("http://", "https://")):
+                    raise ValueError(f"forums.{key} must be an HTTP(S) URL")
+
+    def priority_for(
+        self,
+        artifact_type: str,
+        available_sources: set[str] | None = None,
+    ) -> tuple[str, ...]:
+        """Return configured source order, optionally filtered by availability."""
+        if not artifact_type.strip():
+            raise ValueError("artifact_type must not be blank")
+        configured = self.source_priority.get(artifact_type, ())
+        if available_sources is None:
+            return tuple(configured)
+        return tuple(source for source in configured if source in available_sources)
+
+    def source_enabled(self, source: str) -> bool:
+        """Return configured enablement, defaulting to enabled for overrides."""
+        return self.enabled_sources.get(source, True)
+
+    def select_source(self, artifact_type: str, available_sources: set[str]) -> str:
+        """Select the highest-priority available source for an artifact."""
+        selected = self.priority_for(artifact_type, available_sources)
+        if not selected:
+            raise ValueError(
+                f"no configured source is available for artifact type {artifact_type!r}"
+            )
+        return selected[0]
 
     def public_dict(self) -> dict[str, Any]:
         """Return serializable configuration without environment credentials."""
@@ -58,13 +153,31 @@ class SourceConfig:
 
 def load_source_config(path: Path | None = None) -> SourceConfig:
     values: dict[str, Any] = {}
-    if path and path.exists():
-        values = json.loads(path.read_text(encoding="utf-8"))
+    config_path = path
+    if config_path is None:
+        config_path = Path(__file__).resolve().parents[2] / "configs" / "sources.json"
+    if config_path.exists():
+        values = json.loads(config_path.read_text(encoding="utf-8"))
         if not isinstance(values, dict):
             raise ValueError("source configuration must be a JSON object")
 
     ethereum = values.get("ethereum", {})
+    for section_name in (
+        "ethereum",
+        "etherscan",
+        "coingecko",
+        "gdelt",
+        "forums",
+        "aws_public_blockchain",
+        "source_priority",
+        "collection",
+    ):
+        section = values.get(section_name, {})
+        if not isinstance(section, Mapping):
+            raise ValueError(f"source configuration section {section_name!r} must be an object")
     ethereum_rpc = ethereum.get("rpc", {}) if isinstance(ethereum, Mapping) else {}
+    if not isinstance(ethereum_rpc, Mapping):
+        raise ValueError("source configuration section 'ethereum.rpc' must be an object")
     etherscan = values.get("etherscan", {})
     coingecko = values.get("coingecko", {})
     gdelt = values.get("gdelt", {})
@@ -100,12 +213,23 @@ def load_source_config(path: Path | None = None) -> SourceConfig:
         {
             "forums": values.get("forums", {}),
             "aws_public_blockchain": values.get("aws_public_blockchain", {}),
-            "source_priority": {
-                key: tuple(value)
-                for key, value in values.get("source_priority", {}).items()
+            "enabled_sources": {
+                "ethereum_rpc": bool(ethereum.get("enabled", True)),
+                "etherscan": bool(etherscan.get("enabled", True)),
+                "coingecko": bool(coingecko.get("enabled", True)),
+                "gdelt": bool(gdelt.get("enabled", True)),
+                "aws_public_blockchain": bool(
+                    values.get("aws_public_blockchain", {}).get("enabled", True)
+                ),
+                "forums": bool(values.get("forums", {}).get("enabled", True)),
             },
+            "source_priority": {},
         }
     )
+    for key, value in values.get("source_priority", {}).items():
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(f"source priority for {key} must be an array")
+        flattened["source_priority"][key] = tuple(value)
     for key in (
         "request_timeout_seconds",
         "maximum_attempts",
