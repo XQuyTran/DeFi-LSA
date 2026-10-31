@@ -49,9 +49,9 @@ _AUTH_HEADER_RE = re.compile(
     r"(?i)\b(bearer|basic)\s+((?!\[REDACTED\])[a-zA-Z0-9_\-\.~+/]+=*)"
 )
 
-# Matches known provider RPC endpoints with secret tokens in path
+# Matches RPC provider endpoints with secret tokens in versioned paths
 _PROVIDER_PATH_RE = re.compile(
-    r"(https?://(?:[a-zA-Z0-9_\-\.]*infura\.io/v3/|[a-zA-Z0-9_\-\.]*alchemy\.com/v2/))((?!\[REDACTED\])[a-zA-Z0-9_\-]+)"
+    r"(https?://(?:[a-zA-Z0-9_\-\.]*infura\.io/v3/|[a-zA-Z0-9_\-\.]*alchemy\.com/v2/|[^/\s]+/v[23]/))((?!\[REDACTED\])[a-zA-Z0-9_\-]+)"
 )
 
 # Matches basic auth embedded in URLs: https://user:pass@host
