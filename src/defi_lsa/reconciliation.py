@@ -19,6 +19,8 @@ def reconcile_samples(
     etherscan_logs: Iterable[Mapping[str, Any]] = (),
     aws_logs: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
+    rpc_transactions = list(rpc_transactions)
+    rpc_logs = list(rpc_logs)
     report = {
         "transactions": {
             "rpc_vs_etherscan": reconcile_source_records(rpc_transactions, etherscan_transactions, "tx_hash"),

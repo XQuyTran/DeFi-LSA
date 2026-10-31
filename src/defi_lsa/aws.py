@@ -22,8 +22,12 @@ class AwsPublicBlockchainAdapter:
         return list(self.query("transactions", {"start_block": start_block, "end_block": end_block}))
 
     def fetch_aws_logs(self, start_block: int, end_block: int, addresses: Iterable[str] = ()) -> list[dict[str, Any]]:
-        rows = self.query("logs", {"start_block": start_block, "end_block": end_block, "addresses": list(addresses)})
-        return filter_aws_records_by_scope(rows, addresses) if addresses else list(rows)
+        scope_addresses = list(addresses)
+        rows = self.query(
+            "logs",
+            {"start_block": start_block, "end_block": end_block, "addresses": scope_addresses},
+        )
+        return filter_aws_records_by_scope(rows, scope_addresses) if scope_addresses else list(rows)
 
 
 def filter_aws_records_by_scope(records: Iterable[Mapping[str, Any]], addresses: Iterable[str]) -> list[dict[str, Any]]:
@@ -52,12 +56,27 @@ def normalize_aws_block(record: Mapping[str, Any], event_id: str) -> dict[str, A
 
 
 def reconcile_source_records(primary: Iterable[Mapping[str, Any]], secondary: Iterable[Mapping[str, Any]], key: str) -> dict[str, Any]:
+    provenance_fields = {"source", "source_sha256", "normalization_version", "retrieved_at_utc"}
+
+    def canonical(row: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            field: value
+            for field, value in row.items()
+            if field not in provenance_fields
+        }
+
     left = {str(row[key]).lower(): row for row in primary}
     right = {str(row[key]).lower(): row for row in secondary}
     conflicts = [
-        {"key": item, "primary": left[item], "secondary": right[item]}
+        {
+            "key": item,
+            "primary": left[item],
+            "secondary": right[item],
+            "primary_canonical": canonical(left[item]),
+            "secondary_canonical": canonical(right[item]),
+        }
         for item in sorted(left.keys() & right.keys())
-        if left[item] != right[item]
+        if canonical(left[item]) != canonical(right[item])
     ]
     return {
         "primary_count": len(left),

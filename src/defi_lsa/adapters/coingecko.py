@@ -275,20 +275,22 @@ class CoinGeckoAdapter:
             "to": str(to_timestamp),
         }
         url = f"{self.api_base_url}/coins/{coin_id.strip()}/market_chart/range?{urlencode(params)}"
-        data = self._request_json(url)
-
         if event_id:
             root = raw_dir or Path.cwd()
             filename = f"{coin_id.strip()}_{from_timestamp}_{to_timestamp}.json"
             dest_path = source_path("coingecko", event_id, filename, root=root)
-            content_bytes = (
-                json.dumps(data, indent=2, sort_keys=True) + "\n"
-            ).encode("utf-8")
             if dest_path.exists():
+                data = json.loads(dest_path.read_text(encoding="utf-8"))
                 sha256 = hashlib.sha256(dest_path.read_bytes()).hexdigest()
             else:
+                data = self._request_json(url)
+                content_bytes = (
+                    json.dumps(data, indent=2, sort_keys=True) + "\n"
+                ).encode("utf-8")
                 sha256 = write_source_artifact(dest_path, content_bytes)
             data["_source_sha256"] = sha256
+        else:
+            data = self._request_json(url)
 
         return data
 

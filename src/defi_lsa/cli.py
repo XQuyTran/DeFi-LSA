@@ -12,7 +12,15 @@ from urllib.request import Request, urlopen
 from .collectors import ADAPTER_VERSION, collect_source_manifest
 from .config import load_source_config
 from .observability import CollectionMetrics
-from .audit import build_d2_gate_report
+from .audit import (
+    audit_abi_coverage,
+    audit_block_coverage,
+    audit_log_range_coverage,
+    audit_receipt_coverage,
+    audit_registered_transaction_coverage,
+    build_d2_gate_report,
+)
+from .checkpoints import CheckpointStore
 from .orchestration import CollectionContext
 from .registry import (
     build_contract_scope,
@@ -82,7 +90,15 @@ def _build_command(args: argparse.Namespace) -> int:
 def _source_manifest_command(args: argparse.Namespace) -> int:
     artifacts = []
     for item in args.artifact:
-        source, url, path = item.split("=", maxsplit=2)
+        first_sep = item.find("=")
+        last_sep = item.rfind("=")
+        if first_sep <= 0 or last_sep <= first_sep:
+            raise ValueError(
+                f"invalid --artifact value {item!r}; expected SOURCE=URL=PATH"
+            )
+        source = item[:first_sep]
+        url = item[first_sep + 1:last_sep]
+        path = item[last_sep + 1:]
         artifact_path = Path(path)
         artifacts.append((source, url, artifact_path, ADAPTER_VERSION))
     collect_source_manifest(args.output, artifacts)
@@ -185,8 +201,6 @@ def _collect_command(args: argparse.Namespace) -> int:
             output_root=args.output,
             resume=args.resume,
         )
-        if args.stage != "logs":
-            raise ValueError(f"collection stage is not implemented: {args.stage}")
         if args.source not in ("rpc", "auto"):
             raise ValueError("the logs stage requires --source rpc or --source auto")
         result = context.collect_logs()
@@ -208,10 +222,67 @@ def _collect_command(args: argparse.Namespace) -> int:
 
 
 def _audit_command(args: argparse.Namespace) -> int:
+    run_root = args.output / "runs"
+    events_payload = json.loads(
+        (_default_root() / "configs" / "events.json").read_text(encoding="utf-8")
+    )
+    if not isinstance(events_payload, list):
+        raise ValueError("materialized events registry must be a JSON array")
+    selected_events = [
+        item
+        for item in events_payload
+        if item.get("event_id") == args.event
+        or str(item.get("event_id", "")).startswith(f"{args.event}_")
+    ]
+    if not selected_events:
+        raise ValueError(f"No event matched: {args.event}")
+    if len(selected_events) > 1:
+        raise ValueError(f"Event prefix is ambiguous: {args.event}")
+    event = selected_events[0]
+    event_id = str(event["event_id"])
+
+    start_block = event.get("start_block")
+    end_block = event.get("end_block")
+    logs_jsonl = run_root / "data" / "raw" / "normalized" / "logs" / f"{event_id}.jsonl"
+    transactions_jsonl = run_root / "data" / "raw" / "normalized" / "transactions" / f"{event_id}.jsonl"
+    receipts_jsonl = run_root / "data" / "raw" / "normalized" / "receipts" / f"{event_id}.jsonl"
+    abi_dir = run_root / "data" / "raw" / "source" / "abi" / event_id
+    checkpoint = CheckpointStore(run_root / "checkpoints").load_checkpoint(event_id, "logs")
+
+    block = (
+        audit_block_coverage(int(start_block), int(end_block), logs_jsonl)
+        if start_block is not None and end_block is not None
+        else {"missing_block_count": 1}
+    )
+    tx_hashes = [event["exploit_tx_hash"]] if event.get("exploit_tx_hash") else []
+    transactions = audit_registered_transaction_coverage(tx_hashes, transactions_jsonl)
+    receipts = audit_receipt_coverage(tx_hashes, receipts_jsonl)
+    logs = audit_log_range_coverage(checkpoint)
+    addresses = (
+        list(event.get("protocol_or_vulnerable_contracts", []))
+        + list(event.get("attack_contracts", []))
+        + list(event.get("attacker_addresses", []))
+    )
+    abi = audit_abi_coverage(
+        [str(address) for address in addresses if str(address).strip()],
+        abi_dir,
+    )
+    prices_present = (
+        run_root / "data" / "raw" / "normalized" / "prices" / "coingecko" / f"{event_id}.jsonl"
+    ).exists()
+    public_present = any(
+        (run_root / "data" / "raw" / "normalized" / source / f"{event_id}.jsonl").exists()
+        for source in ("discourse", "gdelt", "protocol")
+    )
     report = build_d2_gate_report(
-        args.output / args.event / "d2_collection_audit.json",
-        block={}, transactions={}, receipts={}, logs={}, abi={},
-        prices={"status": "conditional"}, public_sources={"status": "conditional"},
+        args.output / event_id / "d2_collection_audit.json",
+        block=block,
+        transactions=transactions,
+        receipts=receipts,
+        logs=logs,
+        abi=abi,
+        prices={"status": "conditional" if prices_present else "failed"},
+        public_sources={"status": "conditional" if public_present else "failed"},
     )
     print(report["status"])
     return 0 if report["status"] != "NO_GO" else 2
@@ -290,8 +361,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     collect = subparsers.add_parser("collect", help="start or resume a collection run")
     collect.add_argument("--event", required=True)
-    collect.add_argument("--source", default="rpc")
-    collect.add_argument("--stage", default="all")
+    collect.add_argument("--source", default="rpc", choices=("rpc", "auto"))
+    collect.add_argument("--stage", default="logs", choices=("logs",))
     collect.add_argument("--config", type=Path)
     collect.add_argument("--output", type=Path, default=root / "reports" / "runs")
     collect.add_argument("--resume", action="store_true")

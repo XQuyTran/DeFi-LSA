@@ -42,34 +42,37 @@ class ProtocolAnnouncementAdapter:
         """Fetch a JSON feed containing announcement metadata."""
         if not feed_url.strip() or not event_id.strip():
             raise ValueError("feed_url and event_id must be non-empty")
-        content = self._request(feed_url)
-        try:
-            payload = json.loads(content.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("protocol feed must be valid JSON") from exc
-        items = payload.get("items", payload.get("articles", []))
-        if not isinstance(items, list):
-            raise ValueError("protocol feed items must be a list")
         root = raw_dir or Path.cwd()
         filename = f"feed_{hashlib.sha256(feed_url.encode()).hexdigest()[:16]}.json"
-        safe_payload = {
-            "items": [
-                {
-                    key: item.get(key)
-                    for key in ("title", "url", "link", "published_at", "published", "date")
-                    if key in item
-                }
-                for item in items
-                if isinstance(item, dict)
-            ]
-        }
-        safe_content = (json.dumps(safe_payload, indent=2, sort_keys=True) + "\n").encode()
         destination = source_path("protocol", event_id, filename, root=root)
-        source_sha = (
-            hashlib.sha256(destination.read_bytes()).hexdigest()
-            if destination.exists()
-            else write_source_artifact(destination, safe_content)
-        )
+        if destination.exists():
+            safe_payload = json.loads(destination.read_text(encoding="utf-8"))
+            source_sha = hashlib.sha256(destination.read_bytes()).hexdigest()
+        else:
+            content = self._request(feed_url)
+            try:
+                payload = json.loads(content.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("protocol feed must be valid JSON") from exc
+            items = payload.get("items", payload.get("articles", []))
+            if not isinstance(items, list):
+                raise ValueError("protocol feed items must be a list")
+            safe_payload = {
+                "items": [
+                    {
+                        key: item.get(key)
+                        for key in ("title", "url", "link", "published_at", "published", "date")
+                        if key in item
+                    }
+                    for item in items
+                    if isinstance(item, dict)
+                ]
+            }
+            safe_content = (json.dumps(safe_payload, indent=2, sort_keys=True) + "\n").encode()
+            source_sha = write_source_artifact(destination, safe_content)
+        items = safe_payload.get("items", [])
+        if not isinstance(items, list):
+            raise ValueError("protocol feed items must be a list")
         records = [self.normalize_announcement_metadata(item, event_id, source_sha) for item in items]
         records = [record for record in records if record is not None]
         if output_dir and records:

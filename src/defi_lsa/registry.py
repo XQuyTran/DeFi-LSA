@@ -83,7 +83,7 @@ def _split_addresses(value: str) -> tuple[str, ...]:
     Uses :func:`~defi_lsa.identifiers.normalize_address` so all address
     normalisation is routed through the canonical validation path.
     """
-    raw_matches = re.findall(r"0x[0-9a-fA-F]{40}", value)
+    raw_matches = re.findall(r"0x[0-9a-fA-F]+", value)
     seen: dict[str, None] = {}
     for raw in raw_matches:
         normalised = normalize_address(raw)

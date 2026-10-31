@@ -278,7 +278,14 @@ def append_normalized_records(
         if written > 0:
             # 4. Append temp file content to the main file.
             batch = tmp_path.read_bytes()
+            needs_separator = False
+            if path.exists() and path.stat().st_size > 0:
+                with path.open("rb") as existing:
+                    existing.seek(-1, os.SEEK_END)
+                    needs_separator = existing.read(1) != b"\n"
             with path.open("ab") as dest:
+                if needs_separator:
+                    dest.write(b"\n")
                 dest.write(batch)
                 dest.flush()
                 os.fsync(dest.fileno())
@@ -289,4 +296,3 @@ def append_normalized_records(
             pass
 
     return written, skipped
-

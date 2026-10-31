@@ -276,43 +276,39 @@ class GDELTAdapter:
             "startdatetime": start_gdelt,
             "enddatetime": end_gdelt,
         }
-        url = f"{self.API_BASE_URL}?{urlencode(params)}"
-
-        data = self._request_json(url)
-
-        # Sanitize response articles so no copyright-protected text is stored
-        raw_articles = data.get("articles", [])
-        if not isinstance(raw_articles, list):
-            raw_articles = []
-
-        sanitized_articles = [
-            _sanitize_article_metadata(a)
-            for a in raw_articles
-            if isinstance(a, dict)
-        ]
-
-        # Save immutable source artifact with metadata only
-        source_payload = {
-            "query": clean_query,
-            "startdatetime": start_gdelt,
-            "enddatetime": end_gdelt,
-            "articles": sanitized_articles,
-        }
-        content_bytes = (
-            json.dumps(source_payload, indent=2, sort_keys=True) + "\n"
-        ).encode("utf-8")
-
         root = raw_dir or Path.cwd()
         query_slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", clean_query)[:32].strip("_")
         if not query_slug:
             query_slug = "query"
         filename = f"gdelt_{query_slug}_{start_gdelt}_{end_gdelt}.json"
         dest_path = source_path("gdelt", event_id, filename, root=root)
-
         if dest_path.exists():
+            source_payload = json.loads(dest_path.read_text(encoding="utf-8"))
             sha256 = hashlib.sha256(dest_path.read_bytes()).hexdigest()
         else:
+            url = f"{self.API_BASE_URL}?{urlencode(params)}"
+            data = self._request_json(url)
+            raw_articles = data.get("articles", [])
+            if not isinstance(raw_articles, list):
+                raw_articles = []
+            sanitized_articles = [
+                _sanitize_article_metadata(a)
+                for a in raw_articles
+                if isinstance(a, dict)
+            ]
+            source_payload = {
+                "query": clean_query,
+                "startdatetime": start_gdelt,
+                "enddatetime": end_gdelt,
+                "articles": sanitized_articles,
+            }
+            content_bytes = (
+                json.dumps(source_payload, indent=2, sort_keys=True) + "\n"
+            ).encode("utf-8")
             sha256 = write_source_artifact(dest_path, content_bytes)
+        sanitized_articles = source_payload.get("articles", [])
+        if not isinstance(sanitized_articles, list):
+            sanitized_articles = []
 
         # Normalize into PublicInfoRecords
         records: list[PublicInfoRecord] = []

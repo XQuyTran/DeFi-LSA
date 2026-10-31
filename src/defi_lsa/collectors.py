@@ -791,6 +791,7 @@ def fetch_logs_chunked(
     retry_policy: RetryPolicy | None = None,
     raw_source_dir: Path | str | None = None,
     report_path: Path | str | None = None,
+    retry_failed_ranges: bool = False,
     strict: bool = True,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> CollectionResult:
@@ -812,6 +813,7 @@ def fetch_logs_chunked(
         retry_policy: RetryPolicy for transient failures.
         raw_source_dir: Optional directory for raw immutable source artifacts.
         report_path: Optional path to persist JSON range report summary.
+        retry_failed_ranges: When True, failed checkpoint ranges are retried.
         strict: When True, unrecoverable failures raise; when False, failed ranges are recorded.
         sleep_fn: Sleep function for retry backoff (defaults to time.sleep).
 
@@ -853,7 +855,7 @@ def fetch_logs_chunked(
         cp = checkpoint_store.load_checkpoint(scope.event_id, "logs")
         if cp is not None:
             if checkpoint_store.validate_checkpoint_scope(cp, scope, start_block, end_block, strict=False):
-                pending_ranges = get_pending_ranges(cp)
+                pending_ranges = get_pending_ranges(cp, retry_failed=retry_failed_ranges)
             else:
                 if strict:
                     checkpoint_store.validate_checkpoint_scope(cp, scope, start_block, end_block, strict=True)
@@ -1039,6 +1041,11 @@ def fetch_logs_chunked(
             "chunks": chunks_report,
         }
         r_path.write_text(json.dumps(report_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    if checkpoint_store is not None and strict:
+        final_checkpoint = checkpoint_store.load_checkpoint(scope.event_id, "logs")
+        if final_checkpoint is not None and final_checkpoint.failed_ranges:
+            raise RuntimeError("log collection incomplete: failed ranges remain in checkpoint")
 
     return CollectionResult(
         artifact_path=out_path,

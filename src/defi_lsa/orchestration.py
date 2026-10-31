@@ -13,6 +13,7 @@ from .collectors import CollectionResult, fetch_logs_chunked, json_rpc_client
 from .config import SourceConfig
 from .identifiers import normalize_address
 from .registry import ContractScope
+from .retry import RateLimiter, RetryPolicy, execute_with_retry
 from .storage import normalized_path
 
 
@@ -70,11 +71,14 @@ class CollectionContext:
         payload = json.loads(events_path.read_text(encoding="utf-8"))
         if not isinstance(payload, list):
             raise ValueError("materialized events registry must be a JSON array")
+        selector = str(event_id).strip()
+        selector_aliases = {"kyber": "kyberswap"}
+        selector = selector_aliases.get(selector, selector)
         matches = [
             item
             for item in payload
-            if item.get("event_id") == event_id
-            or str(item.get("event_id", "")).startswith(f"{event_id}_")
+            if item.get("event_id") == selector
+            or str(item.get("event_id", "")).startswith(f"{selector}_")
         ]
         if not matches:
             raise ValueError(f"No event matched: {event_id}")
@@ -115,11 +119,22 @@ class CollectionContext:
         if not self.source_config.ethereum_rpc_url:
             raise ValueError("ETH_RPC_URL is required for RPC log collection")
         self.logs_path.parent.mkdir(parents=True, exist_ok=True)
+        policy = RetryPolicy(max_attempts=self.source_config.maximum_attempts)
+        rate_limiter = RateLimiter(requests_per_second=self.source_config.requests_per_second)
+        rpc = json_rpc_client(
+            self.source_config.ethereum_rpc_url,
+            timeout=self.source_config.request_timeout_seconds,
+        )
+
+        def limited_rpc(method: str, params: list[Any]) -> Any:
+            rate_limiter.acquire()
+            return execute_with_retry(
+                lambda: rpc(method, params),
+                policy=policy,
+            )
+
         return fetch_logs_chunked(
-            json_rpc_client(
-                self.source_config.ethereum_rpc_url,
-                timeout=self.source_config.request_timeout_seconds,
-            ),
+            limited_rpc,
             self.start_block,
             self.end_block,
             self.scope,
@@ -128,6 +143,8 @@ class CollectionContext:
             initial_chunk_size=self.source_config.initial_log_chunk_size,
             min_chunk_size=self.source_config.minimum_log_chunk_size,
             max_chunk_size=self.source_config.maximum_log_chunk_size,
+            retry_policy=policy,
+            retry_failed_ranges=self.resume,
             raw_source_dir=self.output_root,
             report_path=self.output_root / "reports" / self.event_id / "logs.json",
         )

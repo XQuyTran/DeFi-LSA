@@ -1,8 +1,9 @@
 """Parquet conversion utilities for normalized JSONL records (A16).
 
 Convert normalized JSONL files produced by the DeFi-LSA pipeline into
-Parquet format using PyArrow.  Integer quantities (``value_wei``,
-``gas_price``, etc.) are preserved exactly as ``int64``.
+Parquet format using PyArrow. Integer quantities are preserved exactly;
+``value_wei`` is stored as fixed-size 32-byte binary and other integer
+quantities are stored as ``int64``.
 
 Optional dependency: ``pyarrow``
   Install with:  pip install pyarrow>=14.0
@@ -46,7 +47,6 @@ _INT64_FIELDS: frozenset[str] = frozenset(
         "block_timestamp",
         "gas_used",
         # TransactionRecord / ReceiptRecord
-        "value_wei",
         "gas",
         "gas_price",
         "nonce",
@@ -61,6 +61,7 @@ _INT64_FIELDS: frozenset[str] = frozenset(
 )
 
 _FLOAT64_FIELDS: frozenset[str] = frozenset({"usd_price"})
+_UINT256_BINARY_FIELDS: frozenset[str] = frozenset({"value_wei"})
 
 # Fields that are stored as JSON arrays (topics, inclusion_reasons) — they
 # are serialised as JSON strings in JSONL and decoded back to lists for Arrow.
@@ -175,10 +176,23 @@ def jsonl_to_parquet(
     field_names: list[str] = list(records[0].keys())
 
     columns: dict[str, pa.Array] = {}
+    def _encode_uint256(value: Any) -> bytes | None:
+        if value is None or value == "":
+            return None
+        integer = int(value)
+        if integer < 0:
+            raise ValueError("uint256 fields must be non-negative")
+        return integer.to_bytes(32, byteorder="big", signed=False)
+
     for field in field_names:
         raw_values: list[Any] = [rec.get(field) for rec in records]
 
-        if field in _INT64_FIELDS:
+        if field in _UINT256_BINARY_FIELDS:
+            columns[field] = pa.array(
+                [_encode_uint256(value) for value in raw_values],
+                type=pa.binary(32),
+            )
+        elif field in _INT64_FIELDS:
             columns[field] = pa.array(raw_values, type=pa.int64())
         elif field in _FLOAT64_FIELDS:
             columns[field] = pa.array(raw_values, type=pa.float64())

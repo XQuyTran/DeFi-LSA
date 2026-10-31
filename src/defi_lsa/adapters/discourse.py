@@ -143,21 +143,18 @@ class DiscourseAdapter:
 
         clean_base = str(base_url).strip().rstrip("/")
         clean_topic_id = str(topic_id).strip()
-        topic_url = f"{clean_base}/t/{clean_topic_id}.json"
-
-        # Request topic JSON; unauthorized or not found errors fail immediately
-        data = self._request_json(topic_url)
-
-        # Save immutable source artifact
         root = raw_dir or Path.cwd()
         filename = f"topic_{clean_topic_id}.json"
         dest_path = source_path("discourse", event_id, filename, root=root)
-        content_bytes = (
-            json.dumps(data, indent=2, sort_keys=True) + "\n"
-        ).encode("utf-8")
         if dest_path.exists():
+            data = json.loads(dest_path.read_text(encoding="utf-8"))
             sha256 = hashlib.sha256(dest_path.read_bytes()).hexdigest()
         else:
+            topic_url = f"{clean_base}/t/{clean_topic_id}.json"
+            data = self._request_json(topic_url)
+            content_bytes = (
+                json.dumps(data, indent=2, sort_keys=True) + "\n"
+            ).encode("utf-8")
             sha256 = write_source_artifact(dest_path, content_bytes)
 
         topic_title = str(data.get("title", "")).strip()
@@ -220,17 +217,16 @@ class DiscourseAdapter:
         clean_base = str(base_url).strip().rstrip("/")
         if not clean_base or not event_id.strip():
             raise ValueError("base_url and event_id must be non-empty")
-        data = self._request_json(f"{clean_base}/t/{str(topic_id).strip()}.json?page={page}")
-        # Reuse the normalizer while keeping the raw page immutable.
         root = raw_dir or Path.cwd()
         filename = f"topic_{str(topic_id).strip()}_page_{page}.json"
-        content = (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8")
         destination = source_path("discourse", event_id, filename, root=root)
-        source_sha = (
-            hashlib.sha256(destination.read_bytes()).hexdigest()
-            if destination.exists()
-            else write_source_artifact(destination, content)
-        )
+        if destination.exists():
+            data = json.loads(destination.read_text(encoding="utf-8"))
+            source_sha = hashlib.sha256(destination.read_bytes()).hexdigest()
+        else:
+            data = self._request_json(f"{clean_base}/t/{str(topic_id).strip()}.json?page={page}")
+            content = (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8")
+            source_sha = write_source_artifact(destination, content)
         slug = str(data.get("slug", f"topic-{topic_id}")).strip()
         title = str(data.get("title", "")).strip()
         records: list[PublicInfoRecord] = []

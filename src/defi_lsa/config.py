@@ -52,7 +52,7 @@ class SourceConfig:
         return {
             item.name: getattr(self, item.name)
             for item in fields(self)
-            if not item.name.endswith("_api_key")
+            if not item.name.endswith("_api_key") and item.name != "ethereum_rpc_url"
         }
 
 
@@ -64,6 +64,7 @@ def load_source_config(path: Path | None = None) -> SourceConfig:
             raise ValueError("source configuration must be a JSON object")
 
     ethereum = values.get("ethereum", {})
+    ethereum_rpc = ethereum.get("rpc", {}) if isinstance(ethereum, Mapping) else {}
     etherscan = values.get("etherscan", {})
     coingecko = values.get("coingecko", {})
     gdelt = values.get("gdelt", {})
@@ -71,7 +72,7 @@ def load_source_config(path: Path | None = None) -> SourceConfig:
 
     flattened = dict(values)
     flattened["ethereum_rpc_url"] = os.getenv(
-        str(ethereum.get("rpc", {}).get("url_env", "ETH_RPC_URL")),
+        str(ethereum_rpc.get("url_env", "ETH_RPC_URL")),
         values.get("ethereum_rpc_url", ""),
     )
     flattened["etherscan_api_url"] = etherscan.get(
@@ -105,6 +106,14 @@ def load_source_config(path: Path | None = None) -> SourceConfig:
             },
         }
     )
+    for key in (
+        "request_timeout_seconds",
+        "maximum_attempts",
+        "requests_per_second",
+    ):
+        if key in ethereum_rpc:
+            flattened[key] = ethereum_rpc[key]
+
     for key in (
         "request_timeout_seconds",
         "maximum_attempts",

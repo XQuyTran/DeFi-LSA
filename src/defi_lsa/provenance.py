@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .registry import sha256_file
+from .retry import redact_credentials
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ def generate_source_manifest(
         ),
     )
     for record in normalized:
+        record["request_url"] = redact_credentials(str(record.get("request_url", "")))
         if not record["requested_at_utc"]:
             record["requested_at_utc"] = record["retrieved_at_utc"]
         if not record["completed_at_utc"]:
