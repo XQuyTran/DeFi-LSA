@@ -1,0 +1,12 @@
+{
+  "git_commit": "97a3e1470e626141645037bf59f5a8d17787c6e3",
+  "inputs": {
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\contract_scopes.json": "0121a591cb2763a56cf0ce195dcd4c10389ab9e25c51ed711b155ee8f7b907b6",
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\events.json": "a30c7d04f84ccce9403d2167f6c4e05e200996725f7da7ea8792a5010d57c317",
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\incident_legs.json": "318163db2b948dad8544a2bcd4fa268129e00c0768d78044ee6090b8ca1d6598",
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\public_sources.json": "9b4d2c673843f55152df5548ef1c3b2ee0f93ce3246dfb3a83855196d35e4924",
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\tokens.json": "2655ea63c8f76ff3c58f2ea38cb49d195b693b518e9baf3a832cbcb8d1f54255",
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\data\\raw\\event_candidates.csv": "7658859841c5b12a437fa7b98d1c14f7d9f42f3dc37e6adb1052d6483c6018e5"
+  },
+  "registry_version": "1.0"
+}
