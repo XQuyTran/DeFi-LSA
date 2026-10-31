@@ -27,7 +27,11 @@ def make_config(**overrides):
         "etherscan_api_key": "ETHERSCAN_SECRET",
         "coingecko_api_key": "COINGECKO_SECRET",
         "forums": {"probe_url": "https://forum.example.test/latest.json"},
-        "aws_public_blockchain": {"bucket": "bucket", "region": "us-east-2"},
+        "aws_public_blockchain": {
+            "bucket": "bucket",
+            "region": "us-east-2",
+            "tables": {"logs": "logs/date={YYYY-MM-DD}/"},
+        },
     }
     values.update(overrides)
     return SourceConfig(**values)
@@ -57,6 +61,45 @@ def test_duplicate_priority_is_rejected():
         assert "duplicates" in str(exc)
     else:
         raise AssertionError("duplicate source priority was accepted")
+
+
+def test_unknown_priority_source_is_rejected():
+    config = make_config(source_priority={"logs": ("unknown_source",)})
+
+    try:
+        config.validate()
+    except ValueError as exc:
+        assert "unknown sources" in str(exc)
+    else:
+        raise AssertionError("unknown source priority was accepted")
+
+
+def test_select_source_uses_configured_order():
+    config = make_config(source_priority={"logs": ("aws_public_blockchain", "ethereum_rpc")})
+
+    assert config.select_source("logs", {"ethereum_rpc"}) == "ethereum_rpc"
+
+
+def test_select_source_rejects_empty_available_sources():
+    config = make_config(source_priority={"logs": ("ethereum_rpc",)})
+
+    try:
+        config.select_source("logs", set())
+    except ValueError as exc:
+        assert "no configured source" in str(exc)
+    else:
+        raise AssertionError("empty source selection was accepted")
+
+
+def test_nested_aws_configuration_is_validated():
+    config = make_config(aws_public_blockchain={"enabled": True, "bucket": "bucket"})
+
+    try:
+        config.validate()
+    except ValueError as exc:
+        assert "aws_public_blockchain.region" in str(exc)
+    else:
+        raise AssertionError("incomplete AWS configuration was accepted")
 
 
 def test_rpc_probe_rejects_wrong_chain():
@@ -100,6 +143,17 @@ def test_forum_probe_performs_json_request():
     assert result.status == "reachable"
 
 
+def test_disabled_source_is_not_requested():
+    config = make_config(enabled_sources={"coingecko": False})
+
+    def opener(request, timeout):
+        raise AssertionError("disabled source was requested")
+
+    result = probe_source(config, "coingecko", opener=opener)
+
+    assert result.status == "disabled"
+
+
 def test_probe_maps_http_authentication_error():
     config = make_config()
 
@@ -109,6 +163,48 @@ def test_probe_maps_http_authentication_error():
     result = probe_source(config, "coingecko", opener=opener)
 
     assert result.status == "authentication_error"
+
+
+def test_probe_retries_transient_failure_before_success():
+    config = make_config(maximum_attempts=3, requests_per_second=1000.0)
+    attempts = []
+    sleeps = []
+
+    def opener(request, timeout):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise TimeoutError("temporary timeout")
+        return FakeResponse({"gecko_says": "(V3) To the moon!"})
+
+    result = probe_source(
+        config,
+        "coingecko",
+        opener=opener,
+        sleep_fn=sleeps.append,
+    )
+
+    assert result.status == "reachable"
+    assert len(attempts) == 3
+    assert sleeps == [0.1, 0.2]
+
+
+def test_probe_does_not_retry_authentication_failure():
+    config = make_config(maximum_attempts=3, requests_per_second=1000.0)
+    attempts = []
+
+    def opener(request, timeout):
+        attempts.append(1)
+        raise HTTPError(request.full_url, 403, "Forbidden", {}, None)
+
+    result = probe_source(
+        config,
+        "coingecko",
+        opener=opener,
+        sleep_fn=lambda delay: (_ for _ in ()).throw(AssertionError("unexpected retry")),
+    )
+
+    assert result.status == "authentication_error"
+    assert len(attempts) == 1
 
 
 def test_metrics_redact_error_message_and_context(tmp_path: Path):

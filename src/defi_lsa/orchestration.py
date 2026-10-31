@@ -116,6 +116,12 @@ class CollectionContext:
 
     def collect_logs(self) -> CollectionResult:
         """Collect adaptive RPC logs for the frozen event block window."""
+        if "logs" in self.source_config.source_priority:
+            selected_source = self.source_config.select_source("logs", {"ethereum_rpc"})
+            if selected_source != "ethereum_rpc":
+                raise ValueError(
+                    f"logs source {selected_source!r} is not implemented by the logs stage"
+                )
         if not self.source_config.ethereum_rpc_url:
             raise ValueError("ETH_RPC_URL is required for RPC log collection")
         self.logs_path.parent.mkdir(parents=True, exist_ok=True)
