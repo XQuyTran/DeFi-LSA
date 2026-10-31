@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.error import HTTPError
+from urllib.parse import urlparse
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -195,7 +196,8 @@ class CoinGeckoAdapter:
             "User-Agent": "defi-lsa/0.1.0",
         }
         if self.api_key:
-            if "pro-api.coingecko.com" in self.api_base_url:
+            host = (urlparse(self.api_base_url).hostname or "").lower()
+            if host == "pro-api.coingecko.com":
                 headers["x-cg-pro-api-key"] = self.api_key
             else:
                 headers["x-cg-demo-api-key"] = self.api_key
