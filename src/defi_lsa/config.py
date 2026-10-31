@@ -46,6 +46,26 @@ class SourceConfig:
             <= self.maximum_log_chunk_size
         ):
             raise ValueError("log chunk sizes must be min <= initial <= max")
+        for source_name, source_order in self.source_priority.items():
+            if not source_name.strip():
+                raise ValueError("source priority artifact names must not be blank")
+            if not source_order or any(not source.strip() for source in source_order):
+                raise ValueError(f"source priority for {source_name} must not be blank")
+            if len(set(source_order)) != len(source_order):
+                raise ValueError(f"source priority for {source_name} contains duplicates")
+
+    def priority_for(
+        self,
+        artifact_type: str,
+        available_sources: set[str] | None = None,
+    ) -> tuple[str, ...]:
+        """Return configured source order, optionally filtered by availability."""
+        if not artifact_type.strip():
+            raise ValueError("artifact_type must not be blank")
+        configured = self.source_priority.get(artifact_type, ())
+        if available_sources is None:
+            return tuple(configured)
+        return tuple(source for source in configured if source in available_sources)
 
     def public_dict(self) -> dict[str, Any]:
         """Return serializable configuration without environment credentials."""
@@ -58,8 +78,11 @@ class SourceConfig:
 
 def load_source_config(path: Path | None = None) -> SourceConfig:
     values: dict[str, Any] = {}
-    if path and path.exists():
-        values = json.loads(path.read_text(encoding="utf-8"))
+    config_path = path
+    if config_path is None:
+        config_path = Path(__file__).resolve().parents[2] / "configs" / "sources.json"
+    if config_path.exists():
+        values = json.loads(config_path.read_text(encoding="utf-8"))
         if not isinstance(values, dict):
             raise ValueError("source configuration must be a JSON object")
 
