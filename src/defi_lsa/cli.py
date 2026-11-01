@@ -130,29 +130,69 @@ def _collect_command(args: argparse.Namespace) -> int:
     config = load_source_config(args.config)
     config.validate()
     metrics = CollectionMetrics(event_id=args.event, collector=args.stage)
-    if args.dry_run:
-        print(json.dumps({"run_id": metrics.run_id, "event_id": args.event, "stage": args.stage,
-                          "source": args.source, "dry_run": True}, sort_keys=True))
-        return 0
     context = None
     try:
+        force = getattr(args, "force", False)
         context = CollectionContext.from_files(
             args.event,
             events_path=_default_root() / "configs" / "events.json",
             source_config=config,
             output_root=args.output,
             resume=args.resume,
+            dry_run=args.dry_run,
+            force=force,
         )
-        if args.source not in ("rpc", "auto"):
-            raise ValueError("the logs stage requires --source rpc or --source auto")
-        result = context.collect_logs()
+        if args.dry_run:
+            plan = context.dry_run_plan()
+            plan["stage"] = args.stage
+            plan["source"] = args.source
+            print(json.dumps(plan, sort_keys=True))
+            return 0
+
+        written = 0
+        skipped = 0
+        stage = args.stage
+
+        if stage == "logs":
+            res = context.collect_logs(source=args.source)
+            written, skipped = res.records_written, res.records_skipped
+        elif stage == "transactions":
+            res = context.collect_transactions(source=args.source)
+            written, skipped = res.records_written, res.records_skipped
+        elif stage == "receipts":
+            res = context.collect_receipts(source=args.source)
+            written, skipped = res.records_written, res.records_skipped
+        elif stage == "abi":
+            res = context.collect_abi(source=args.source)
+            written, skipped = res.records_written, res.records_skipped
+        elif stage == "prices":
+            res = context.collect_prices(source=args.source)
+            written, skipped = res.records_written, res.records_skipped
+        elif stage in ("public_sources", "public_information"):
+            results_dict = context.collect_public_sources(source=args.source)
+            for res in results_dict.values():
+                written += res.records_written
+                skipped += res.records_skipped
+        elif stage == "all":
+            all_res = context.collect_all(source=args.source)
+            for key, val in all_res.items():
+                if isinstance(val, dict):
+                    for sub_res in val.values():
+                        written += getattr(sub_res, "records_written", 0)
+                        skipped += getattr(sub_res, "records_skipped", 0)
+                else:
+                    written += getattr(val, "records_written", 0)
+                    skipped += getattr(val, "records_skipped", 0)
+        else:
+            raise ValueError(f"collection stage {stage!r} is not implemented")
+
         metrics.run_id = context.run_id
-        metrics.records_written = result.records_written
-        metrics.records_skipped = result.records_skipped
-        summary = args.output / args.event / f"{context.run_id}.json"
+        metrics.records_written = written
+        metrics.records_skipped = skipped
+        summary = args.output / context.event_id / f"{context.run_id}.json"
         metrics.write_summary(summary)
-        print(json.dumps({"run_id": context.run_id, "status": "completed", "records_written": result.records_written,
-                          "records_skipped": result.records_skipped}, sort_keys=True))
+        print(json.dumps({"run_id": context.run_id, "status": "completed", "records_written": written,
+                          "records_skipped": skipped}, sort_keys=True))
         return 0
     except Exception as exc:
         metrics.record_error(exc, stage=args.stage, source=args.source)
@@ -168,7 +208,7 @@ def _collect_command(args: argparse.Namespace) -> int:
 
 
 def _audit_command(args: argparse.Namespace) -> int:
-    run_root = args.output / "runs"
+    run_root = args.output if (args.output / "data").exists() else (args.output / "runs")
     events_payload = json.loads(
         (_default_root() / "configs" / "events.json").read_text(encoding="utf-8")
     )
@@ -307,12 +347,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     collect = subparsers.add_parser("collect", help="start or resume a collection run")
     collect.add_argument("--event", required=True)
-    collect.add_argument("--source", default="rpc", choices=("rpc", "auto"))
-    collect.add_argument("--stage", default="logs", choices=("logs",))
+    collect.add_argument(
+        "--source",
+        default="rpc",
+        choices=("rpc", "etherscan", "coingecko", "gdelt", "forums", "aws", "auto"),
+    )
+    collect.add_argument(
+        "--stage",
+        default="logs",
+        choices=(
+            "logs",
+            "transactions",
+            "receipts",
+            "abi",
+            "prices",
+            "public_sources",
+            "public_information",
+            "all",
+        ),
+    )
     collect.add_argument("--config", type=Path)
     collect.add_argument("--output", type=Path, default=root / "reports" / "runs")
     collect.add_argument("--resume", action="store_true")
     collect.add_argument("--dry-run", action="store_true")
+    collect.add_argument("--force", action="store_true")
     collect.set_defaults(handler=_collect_command)
 
     audit = subparsers.add_parser("audit", help="run the D2 readiness gate")
