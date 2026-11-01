@@ -9,12 +9,19 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .abi import (
+    EtherscanABIClient,
+    LocalABIFallback,
+    validate_abi_cache,
+    _write_abi_metadata,
+    _write_abi_file,
+    ABIMetadata,
+)
 from .checkpoints import (
     Checkpoint,
     CheckpointStore,
@@ -30,7 +37,7 @@ from .identifiers import (
 )
 from .provenance import SourceRecord, generate_source_manifest
 from .registry import ContractScope, sha256_file
-from .retry import RetryPolicy, classify_source_error, execute_with_retry
+from .retry import RateLimiter, RetryPolicy, classify_source_error, execute_with_retry
 from .schemas import (
     NORMALIZATION_VERSION,
     LogRecord,
@@ -255,26 +262,126 @@ def fetch_abi(
     api_key: str,
     output_dir: Path,
     *,
+    chain_id: int = 1,
+    raw_source_dir: Path | None = None,
+    retry_policy: RetryPolicy | None = None,
+    rate_limiter: RateLimiter | None = None,
+    resolve_proxies: bool = True,
+    local_fallback_dir: Path | None = None,
+    opener: Callable[..., Any] | None = None,
     http_get: Callable[[str], bytes] | None = None,
 ) -> list[Path]:
-    """Persist verified ABIs; missing/invalid ABI responses fail explicitly."""
+    """Persist verified ABIs using Etherscan V2 API with proxy resolution and local fallback.
+
+    For each *address*:
+    1. Checks the local cache via :func:`~defi_lsa.abi.validate_abi_cache`.
+    2. If invalid or absent, fetches from Etherscan V2 (``chainid=<chain_id>``) with
+       shared retry, throttle, credential redaction, and immutable raw-response
+       persistence.
+    3. Optionally resolves proxy implementation addresses and fetches their ABIs.
+    4. Falls back to :class:`~defi_lsa.abi.LocalABIFallback` when Etherscan cannot serve.
+    5. Records per-address provenance in ``<address>.meta.json`` sidecars.
+
+    The ``http_get`` parameter is accepted for backward compatibility but is
+    superseded by ``opener`` when both are provided.
+
+    Args:
+        addresses: Iterable of contract addresses.
+        api_url: Etherscan V2 base URL (e.g. ``https://api.etherscan.io/v2/api``).
+        api_key: Etherscan API key; never logged or written to metadata.
+        output_dir: Directory for normalised ``<address>.json`` ABI files.
+        chain_id: EVM chain ID (default ``1`` = Ethereum mainnet).
+        raw_source_dir: Optional directory for immutable raw Etherscan response files.
+        retry_policy: Optional retry configuration.
+        rate_limiter: Optional token-bucket rate limiter.
+        resolve_proxies: When ``True``, attempt to detect and resolve proxy contracts.
+        local_fallback_dir: Optional directory containing pre-downloaded ABI files
+            used when Etherscan cannot serve an address.
+        opener: Optional HTTP opener callable (replaces ``http_get``).
+        http_get: Deprecated HTTP getter; superseded by ``opener``.
+
+    Returns:
+        List of :class:`~pathlib.Path` objects for every written ABI file.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
-    getter = http_get or (lambda url: urlopen(url, timeout=30).read())
+    effective_raw_dir = raw_source_dir or output_dir / "raw"
+
+    # Resolve opener: prefer explicit opener, then wrap http_get for compat
+    effective_opener: Callable[..., Any] | None = opener
+    legacy_http_get = effective_opener is None and http_get is not None
+    if effective_opener is None and http_get is not None:
+        _getter = http_get
+
+        def _compat_opener(req: Any, timeout: float = 30.0) -> Any:
+            url_str = req.full_url if hasattr(req, "full_url") else str(req)
+            raw = _getter(url_str)
+
+            class _Resp:
+                def read(self) -> bytes:
+                    return raw
+
+            return _Resp()
+
+        effective_opener = _compat_opener
+
+    client = EtherscanABIClient(
+        api_base_url=api_url,
+        api_key=api_key,
+        chain_id=chain_id,
+        retry_policy=retry_policy,
+        rate_limiter=rate_limiter,
+        opener=effective_opener,
+    )
+    fallback = LocalABIFallback(local_fallback_dir) if local_fallback_dir else None
+
     paths: list[Path] = []
-    for address in sorted(set(address.lower() for address in addresses)):
-        query = urlencode(
-            {"module": "contract", "action": "getabi", "address": address, "apikey": api_key}
+    sorted_addresses = sorted(set(a.lower() for a in addresses))
+
+    for address in sorted_addresses:
+        abi_path = output_dir / f"{address}.json"
+        meta_path = output_dir / f"{address}.meta.json"
+
+        # 1. Validate existing cache
+        if abi_path.exists():
+            valid, _ = validate_abi_cache(abi_path, meta_path if meta_path.exists() else None)
+            if valid:
+                paths.append(abi_path)
+                continue
+
+        # 2. Fetch from Etherscan V2 when credentials are available
+        fetched = False
+        if api_key:
+            try:
+                client.fetch_abi(
+                    address,
+                    output_dir,
+                    effective_raw_dir,
+                    resolve_proxy=resolve_proxies and not legacy_http_get,
+                )
+                paths.append(abi_path)
+                fetched = True
+            except Exception:
+                pass  # Fall through to local fallback
+
+        if fetched:
+            continue
+
+        # 3. Local protocol-repository fallback
+        if fallback is not None:
+            meta = fallback.find_abi(address)
+            if meta is not None:
+                abi_path.parent.mkdir(parents=True, exist_ok=True)
+                normalized_checksum = _write_abi_file(meta.abi, abi_path)
+                meta = replace(meta, checksum=normalized_checksum)
+                _write_abi_metadata(meta, output_dir)
+                paths.append(abi_path)
+                continue
+
+        # 4. Address is unresolvable — raise so caller can decide gate status
+        raise RuntimeError(
+            f"ABI unavailable for {address}: Etherscan failed and no local fallback found"
         )
-        body = json.loads(getter(f"{api_url}?{query}").decode("utf-8"))
-        if body.get("status") != "1":
-            raise RuntimeError(f"ABI unavailable for {address}: {body.get('result')}")
-        try:
-            abi = json.loads(body["result"])
-        except (KeyError, TypeError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"Invalid ABI response for {address}") from exc
-        path = output_dir / f"{address}.json"
-        path.write_text(json.dumps(abi, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        paths.append(path)
+
     return paths
 
 
