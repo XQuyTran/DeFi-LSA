@@ -20,6 +20,12 @@ from .collectors import (
     fetch_transactions_by_hash,
     json_rpc_client,
 )
+from .abi import (
+    ABIMetadata,
+    compute_abi_coverage_report,
+    _write_abi_metadata,
+    validate_abi_cache,
+)
 from .config import SourceConfig
 from .identifiers import normalize_address, normalize_tx_hash, normalize_utc_timestamp
 from .registry import (
@@ -44,6 +50,12 @@ from .adapters.protocol import ProtocolAnnouncementAdapter
 
 def _default_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _write_coverage_report(report: dict[str, Any], path: Path) -> None:
+    """Persist an ABI coverage report JSON to *path*."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 @dataclass(frozen=True)
@@ -94,6 +106,11 @@ class CollectionContext:
     @property
     def abi_dir(self) -> Path:
         return self.output_root / "data" / "raw" / "source" / "abi" / self.event_id
+
+    @property
+    def abi_raw_dir(self) -> Path:
+        """Directory for immutable raw Etherscan response files (E5)."""
+        return self.output_root / "data" / "raw" / "source" / "etherscan" / self.event_id
 
     @property
     def prices_path(self) -> Path:
@@ -395,40 +412,113 @@ class CollectionContext:
         )
 
     def collect_abi(self, source: str = "etherscan") -> CollectionResult:
-        """Acquire verified contract ABIs for scoped addresses with local cache support."""
+        """Acquire verified contract ABIs for scoped addresses (E5 hardened).
+
+        Collects ABIs using Etherscan V2 with ``chainid=1``, shared retry and
+        throttling policies, immutable raw-response persistence, ABI cache
+        validation via checksum, proxy contract resolution, and a local
+        protocol-repository fallback.
+
+        After collection, writes an ABI coverage report to
+        ``reports/<event_id>/abi_coverage_report.json`` and updates the
+        ``abi_coverage_percentage`` gate input.
+        """
         if source == "auto" and "abi" in self.source_config.source_priority:
             source = self.source_config.select_source("abi", {"etherscan", "local_cache"})
 
         self._handle_force("abi", [self.abi_dir])
         self.abi_dir.mkdir(parents=True, exist_ok=True)
+        self.abi_raw_dir.mkdir(parents=True, exist_ok=True)
+        self.reports_dir.mkdir(parents=True, exist_ok=True)
 
+        policy = RetryPolicy(max_attempts=self.source_config.maximum_attempts)
+        limiter = RateLimiter(requests_per_second=self.source_config.requests_per_second)
+
+        # Determine local protocol-repository fallback directory
+        protocol_abis_dir = _default_root() / "configs" / "protocol_abis"
+
+        # Validate existing cache entries via checksum (E5.4)
         cached_count = 0
         missing_addresses = []
         for address in self.scope.addresses:
-            target_path = self.abi_dir / f"{address.lower()}.json"
-            if target_path.exists() and not self.force:
-                try:
-                    json.loads(target_path.read_text(encoding="utf-8"))
+            abi_path = self.abi_dir / f"{address.lower()}.json"
+            meta_path = self.abi_dir / f"{address.lower()}.meta.json"
+            if abi_path.exists() and not self.force:
+                valid, _ = validate_abi_cache(
+                    abi_path,
+                    meta_path if meta_path.exists() else None,
+                )
+                if valid:
                     cached_count += 1
                     continue
-                except Exception:
-                    pass
+                if not meta_path.exists():
+                    try:
+                        legacy_abi = json.loads(abi_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        legacy_abi = None
+                    if isinstance(legacy_abi, list):
+                        _write_abi_metadata(
+                            ABIMetadata(
+                                address=address.lower(),
+                                abi=legacy_abi,
+                                source="local_cache",
+                                raw_artifact_path=str(abi_path),
+                                source_url=f"local://cache/{address.lower()}.json",
+                                checksum="",
+                                coverage_status="fallback",
+                            ),
+                            self.abi_dir,
+                        )
+                        cached_count += 1
+                        continue
             missing_addresses.append(address)
 
         if not missing_addresses:
+            # All cached and valid — still write coverage report
+            coverage = compute_abi_coverage_report(
+                self.scope.addresses, self.abi_dir, event_id=self.event_id
+            )
+            _write_coverage_report(coverage, self.reports_dir / "abi_coverage_report.json")
             return CollectionResult(self.abi_dir, 0, cached_count)
 
-        if not self.source_config.etherscan_api_key:
-            raise ValueError("ETHERSCAN_API_KEY is required for ABI collection")
+        # Build opener wrapper if provided
+        http_get = None
+        if self.opener is not None:
+            _op = self.opener
 
-        http_get = (lambda url: self.opener(url).read()) if self.opener is not None else None
-        written_paths = fetch_abi(
-            missing_addresses,
-            self.source_config.etherscan_api_url,
-            self.source_config.etherscan_api_key,
-            self.abi_dir,
-            http_get=http_get,
+            def http_get(url: str) -> bytes:  # type: ignore[misc]
+                req_obj = __import__("urllib.request", fromlist=["Request"]).Request(
+                    url, headers={"User-Agent": "defi-lsa"}
+                )
+                resp = _op(req_obj, timeout=self.source_config.request_timeout_seconds)
+                return resp.read()
+
+        # Fetch missing addresses via E5-hardened fetch_abi
+        try:
+            written_paths = fetch_abi(
+                missing_addresses,
+                self.source_config.etherscan_api_url,
+                self.source_config.etherscan_api_key,
+                self.abi_dir,
+                chain_id=self.source_config.etherscan_chain_id,
+                raw_source_dir=self.abi_raw_dir,
+                retry_policy=policy,
+                rate_limiter=limiter,
+                resolve_proxies=True,
+                local_fallback_dir=protocol_abis_dir if protocol_abis_dir.exists() else None,
+                opener=self.opener,
+                http_get=http_get,
+            )
+        except RuntimeError:
+            # Preserve a durable NO_GO report for unresolved addresses.
+            written_paths = []
+
+        # Write ABI coverage report (E5 acceptance criteria)
+        coverage = compute_abi_coverage_report(
+            self.scope.addresses, self.abi_dir, event_id=self.event_id
         )
+        _write_coverage_report(coverage, self.reports_dir / "abi_coverage_report.json")
+
         return CollectionResult(self.abi_dir, len(written_paths), cached_count)
 
     def collect_prices(self, source: str = "coingecko") -> CollectionResult:
