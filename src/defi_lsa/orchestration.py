@@ -1,15 +1,22 @@
 """Collection context and stage dispatch for executable D2 runs."""
 
 import json
+import hashlib
 import shutil
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .checkpoints import Checkpoint, CheckpointStore, compute_scope_hash
+from .aws import (
+    AwsPublicBlockchainAdapter,
+    normalize_aws_log_record,
+    normalize_aws_transaction_record,
+    reconcile_source_records,
+)
 from .collectors import (
     CollectionResult,
     DiscoveredTransactions,
@@ -28,6 +35,7 @@ from .abi import (
 )
 from .config import SourceConfig
 from .identifiers import normalize_address, normalize_tx_hash, normalize_utc_timestamp
+from .schemas import normalize_log_record, normalize_transaction_record
 from .registry import (
     ContractScope,
     IncidentLeg,
@@ -147,6 +155,14 @@ class CollectionContext:
     @property
     def reports_dir(self) -> Path:
         return self.output_root / "reports" / self.event_id
+
+    @property
+    def aws_adapter(self) -> AwsPublicBlockchainAdapter:
+        settings = self.source_config.aws_public_blockchain
+        return AwsPublicBlockchainAdapter(
+            root=str(settings.get("ethereum_root", "s3://aws-public-blockchain/v1.0/eth/")),
+            region=str(settings.get("region", "us-east-2")),
+        )
 
     @property
     def checkpoints(self) -> CheckpointStore:
@@ -328,10 +344,142 @@ class CollectionContext:
 
         return limited_rpc, policy
 
+    def _write_aws_verification_report(
+        self,
+        artifact_type: str,
+        aws_records: Iterable[dict[str, Any]],
+        rpc_records: Iterable[dict[str, Any]],
+        key: str,
+        errors: Iterable[str] = (),
+    ) -> None:
+        """Persist AWS/RPC comparison results without replacing either source."""
+        aws_rows = list(aws_records)
+        rpc_rows = list(rpc_records)
+        verification_errors = list(errors)
+        if verification_errors and not rpc_rows:
+            comparison: dict[str, Any] = {
+                "status": "unavailable",
+                "primary_count": len(aws_rows),
+                "secondary_count": 0,
+                "missing_from_secondary": sorted(str(row.get(key, "")) for row in aws_rows),
+                "missing_from_primary": [],
+                "conflicts": [],
+            }
+        else:
+            comparison = reconcile_source_records(aws_rows, rpc_rows, key)
+        report = {
+            "artifact_type": artifact_type,
+            "primary_source": "aws",
+            "secondary_source": "rpc",
+            "verification_errors": verification_errors,
+            "comparison": comparison,
+            "status": comparison["status"],
+        }
+        report_path = self.reports_dir / f"{artifact_type}_aws_rpc_reconciliation.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def _verify_aws_transactions(
+        self, aws_records: Iterable[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        records = list(aws_records)
+        if self.rpc is None and not self.source_config.ethereum_rpc_url:
+            return [], ["RPC verification is unavailable: ETH_RPC_URL is not configured"]
+        rpc, _ = self._rpc_caller()
+        verified: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for aws_record in records:
+            tx_hash = str(aws_record["tx_hash"])
+            raw = rpc("eth_getTransactionByHash", [tx_hash])
+            if not raw:
+                errors.append(f"missing RPC transaction {tx_hash}")
+                continue
+            raw_record = dict(raw)
+            raw_record.setdefault("hash", tx_hash)
+            raw_record.setdefault("chainId", self.scope.chain_id)
+            raw_record["source"] = "rpc"
+            source_sha = hashlib.sha256(
+                json.dumps(raw, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
+            try:
+                verified.append(
+                    asdict(
+                        normalize_transaction_record(
+                            raw_record,
+                            self.event_id,
+                            source_sha,
+                            inclusion_reasons=tuple(aws_record["inclusion_reasons"]),
+                        )
+                    )
+                )
+            except (KeyError, ValueError) as exc:
+                errors.append(f"invalid RPC transaction {tx_hash}: {exc}")
+        return verified, errors
+
+    def _verify_aws_logs(
+        self, aws_records: Iterable[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        records = list(aws_records)
+        if self.rpc is None and not self.source_config.ethereum_rpc_url:
+            return [], ["RPC verification is unavailable: ETH_RPC_URL is not configured"]
+        rpc, _ = self._rpc_caller()
+        verified: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for tx_hash in sorted({str(row["tx_hash"]) for row in records}):
+            receipt = rpc("eth_getTransactionReceipt", [tx_hash])
+            if not receipt:
+                errors.append(f"missing RPC receipt {tx_hash}")
+                continue
+            for raw_log in receipt.get("logs", []):
+                raw_record = dict(raw_log)
+                raw_record.setdefault("transactionHash", tx_hash)
+                raw_record.setdefault("chainId", self.scope.chain_id)
+                raw_record["source"] = "rpc"
+                source_sha = hashlib.sha256(
+                    json.dumps(receipt, sort_keys=True, default=str).encode("utf-8")
+                ).hexdigest()
+                try:
+                    verified.append(
+                        asdict(normalize_log_record(raw_record, self.event_id, source_sha))
+                    )
+                except (KeyError, ValueError) as exc:
+                    errors.append(f"invalid RPC log {tx_hash}: {exc}")
+        return verified, errors
+
     def collect_logs(self, source: str = "rpc") -> CollectionResult:
         """Collect adaptive RPC logs for the frozen event block window."""
         if source == "auto" and "logs" in self.source_config.source_priority:
-            source = self.source_config.select_source("logs", {"ethereum_rpc"})
+            available = {"ethereum_rpc"}
+            if self.source_config.source_enabled("aws_public_blockchain"):
+                available.add("aws_public_blockchain")
+            source = self.source_config.select_source("logs", available)
+        if source in ("aws", "aws_public_blockchain"):
+            self._handle_force("logs", [self.logs_path])
+            rows = self.aws_adapter.fetch_table(
+                "logs",
+                start_block=self.start_block,
+                end_block=self.end_block,
+                addresses=self.scope.addresses,
+            )
+            records = []
+            source_sha = hashlib.sha256(
+                json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
+            for row in rows:
+                records.append(normalize_aws_log_record(row, self.event_id, source_sha))
+            written, skipped = append_normalized_records(
+                self.logs_path, records, key_field="record_key"
+            )
+            rpc_records, verification_errors = self._verify_aws_logs(records)
+            self._write_aws_verification_report(
+                "logs", records, rpc_records, "record_key", verification_errors
+            )
+            return CollectionResult(
+                self.logs_path,
+                written,
+                skipped,
+                source_sha256=source_sha,
+            )
         if source not in ("rpc", "ethereum_rpc", "auto"):
             raise ValueError(f"logs source {source!r} is not implemented by the logs stage")
 
@@ -368,14 +516,55 @@ class CollectionContext:
     def collect_transactions(self, source: str = "rpc") -> CollectionResult:
         """Retrieve and normalize full transactions discovered from logs and registry anchors."""
         if source == "auto" and "transactions" in self.source_config.source_priority:
-            source = self.source_config.select_source("transactions", {"ethereum_rpc"})
-        if source not in ("rpc", "ethereum_rpc", "auto"):
+            available = {"ethereum_rpc"}
+            if self.source_config.source_enabled("aws_public_blockchain"):
+                available.add("aws_public_blockchain")
+            source = self.source_config.select_source("transactions", available)
+        if source not in ("rpc", "ethereum_rpc", "aws", "aws_public_blockchain", "auto"):
             raise ValueError(f"transactions source {source!r} is not implemented")
 
         self._handle_force("transactions", [self.transactions_path, self.transaction_index_path])
         discovered = self.discover_transactions()
         if not discovered:
             return CollectionResult(self.transactions_path, 0, 0)
+
+        if source in ("aws", "aws_public_blockchain"):
+            hashes = [item[0] for item in discovered]
+            rows = self.aws_adapter.fetch_table(
+                "transactions",
+                start_block=self.start_block,
+                end_block=self.end_block,
+                transaction_hashes=hashes,
+                addresses=self.scope.addresses,
+            )
+            reasons = {item[0]: item[1] for item in discovered}
+            source_sha = hashlib.sha256(
+                json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
+            records = [
+                normalize_aws_transaction_record(
+                    row,
+                    self.event_id,
+                    source_sha,
+                    inclusion_reasons=reasons.get(
+                        str(row.get("hash", "")).lower(), ("direct_call",)
+                    ),
+                )
+                for row in rows
+            ]
+            written, skipped = append_normalized_records(
+                self.transactions_path, records, key_field="record_key"
+            )
+            rpc_records, verification_errors = self._verify_aws_transactions(records)
+            self._write_aws_verification_report(
+                "transactions", records, rpc_records, "record_key", verification_errors
+            )
+            return CollectionResult(
+                self.transactions_path,
+                written,
+                skipped,
+                source_sha256=source_sha,
+            )
 
         limited_rpc, policy = self._rpc_caller()
         raw_dir = self.raw_source_dir / "transactions" / self.event_id

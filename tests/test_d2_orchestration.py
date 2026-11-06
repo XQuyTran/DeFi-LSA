@@ -10,10 +10,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 from defi_lsa.cli import build_parser
 from defi_lsa.config import SourceConfig
+from defi_lsa.collectors import DiscoveredTransactions
 from defi_lsa.orchestration import CollectionContext
 from defi_lsa.registry import ContractScope, IncidentLeg
 from defi_lsa.storage import read_jsonl_records
@@ -219,6 +220,74 @@ class OrchestrationTests(unittest.TestCase):
             self.assertTrue(ctx.transactions_path.exists())
             self.assertTrue(ctx.receipts_path.exists())
             self.assertTrue(ctx.transaction_index_path.exists())
+
+    def test_collect_transactions_from_aws(self) -> None:
+        tx_hash = "0x47ac3527d02e6b9631c77fad1cdee7bfa77a8a7bfd4880dccbda5146ace4088f"
+        aws_adapter = MagicMock()
+        aws_adapter.fetch_table.return_value = [
+            {
+                "hash": tx_hash,
+                "block_number": 16818024,
+                "from": "0xb2698c2d99ad2c302a95a8db26b08d17a77cedd4",
+                "to": "0x27182842e098f60e3d576794a5bffb0777e025d3",
+                "value": 0,
+                "gas": 21000,
+                "gas_price": 1,
+                "nonce": 0,
+            }
+        ]
+
+        def rpc_handler(method: str, params: list[Any]) -> Any:
+            if method == "eth_getTransactionByHash":
+                return {
+                    "hash": tx_hash,
+                    "blockNumber": hex(16818024),
+                    "from": "0xb2698c2d99ad2c302a95a8db26b08d17a77cedd4",
+                    "to": "0x27182842e098f60e3d576794a5bffb0777e025d3",
+                    "value": "0x0",
+                    "gas": "0x5208",
+                    "gasPrice": "0x1",
+                    "nonce": "0x0",
+                }
+            raise AssertionError(f"unexpected rpc method {method}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(Path(tmp))
+            discovered = DiscoveredTransactions({(tx_hash, ("registry_anchor",))})
+            with patch.object(CollectionContext, "aws_adapter", new_callable=PropertyMock) as aws_property, patch.object(
+                CollectionContext, "discover_transactions", return_value=discovered
+            ), patch.object(
+                CollectionContext, "_rpc_caller", return_value=(rpc_handler, MagicMock())
+            ):
+                aws_property.return_value = aws_adapter
+                result = ctx.collect_transactions(source="aws")
+
+            self.assertEqual(result.records_written, 1)
+            self.assertEqual(read_jsonl_records(ctx.transactions_path)[0]["source"], "aws")
+            aws_adapter.fetch_table.assert_called_once()
+            report = json.loads(
+                (ctx.reports_dir / "transactions_aws_rpc_reconciliation.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(report["status"], "match")
+
+    def test_auto_transaction_source_selects_configured_aws(self) -> None:
+        config = SourceConfig(
+            ethereum_rpc_url="https://rpc.example.test/token",
+            source_priority={"transactions": ("aws_public_blockchain", "ethereum_rpc")},
+        )
+        aws_adapter = MagicMock()
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(Path(tmp), source_config=config)
+            with patch.object(CollectionContext, "aws_adapter", new_callable=PropertyMock) as aws_property, patch.object(
+                CollectionContext, "discover_transactions", return_value=DiscoveredTransactions()
+            ):
+                aws_property.return_value = aws_adapter
+                result = ctx.collect_transactions(source="auto")
+
+            self.assertEqual(result.records_written, 0)
+            aws_adapter.fetch_table.assert_not_called()
 
     def test_collect_abi_cached_and_fetched(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
