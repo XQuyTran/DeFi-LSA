@@ -1,7 +1,11 @@
 """Reader and normalization helpers for the AWS public blockchain dataset."""
 
+import ast
+import json
+import re
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
+from numbers import Integral, Real
 from typing import Any, Iterable, Mapping
 
 from .schemas import (
@@ -39,6 +43,7 @@ AWS_TABLE_CONTRACTS: dict[str, AwsTableContract] = {
         ("hash", "block_number", "from_address", "to_address", "value", "gas", "gas_price", "nonce"),
         ("hash",),
         ("from_address", "to_address"),
+        transaction_column="hash",
     ),
     "logs": AwsTableContract(
         "logs",
@@ -205,6 +210,62 @@ def _anonymous_filesystem(region: str) -> Any:
     return s3fs.S3FileSystem(anon=True, client_kwargs={"region_name": region})
 
 
+def _aws_address(value: Any) -> Any:
+    """Convert ABI-padded 32-byte addresses to canonical Ethereum addresses."""
+    if isinstance(value, str) and value.startswith("0x") and len(value) == 66:
+        try:
+            int(value[2:], 16)
+        except ValueError:
+            return value
+        return "0x" + value[-40:]
+    return value
+
+
+def _aws_trace_address(value: Any) -> Any:
+    """Convert serialized AWS trace paths into the canonical list shape."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode("utf-8", errors="strict")
+    if isinstance(value, Integral):
+        return [int(value)]
+    if isinstance(value, Real) and value.is_integer():
+        return [int(value)]
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        parsed = tolist()
+        if isinstance(parsed, (list, tuple)):
+            return parsed
+        if isinstance(parsed, Integral):
+            return [int(parsed)]
+        if isinstance(parsed, Real) and parsed.is_integer():
+            return [int(parsed)]
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return []
+    if text.lower() in {"root", "none", "null"}:
+        return []
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(text)
+        except (ValueError, SyntaxError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, (list, tuple)):
+            return parsed
+        if isinstance(parsed, Integral):
+            return [int(parsed)]
+        if isinstance(parsed, Real) and parsed.is_integer():
+            return [int(parsed)]
+    match = re.fullmatch(r"[\[\(\{]?\s*(\d+(?:\s*[,.;/]\s*\d+)*)\s*[\]\)\}]?", text)
+    if match:
+        return [int(part) for part in re.split(r"\s*[,.;/]\s*", match.group(1))]
+    return value
+
+
 def _build_filter_expression(dataset_module: Any, contract: AwsTableContract, filters: Mapping[str, Any]) -> Any:
     expression = None
     if filters.get("start_block") is not None:
@@ -237,7 +298,11 @@ def _post_filter_rows(rows: Iterable[Mapping[str, Any]], contract: AwsTableContr
             continue
         if end_block is not None and (block_number is None or int(block_number) > end_block):
             continue
-        if hashes and str(row.get(contract.transaction_column, "")).lower() not in hashes:
+        if (
+            hashes
+            and contract.transaction_column in contract.required_columns
+            and str(row.get(contract.transaction_column, "")).lower() not in hashes
+        ):
             continue
         if addresses and not any(str(row.get(column, "")).lower() in addresses for column in contract.address_columns):
             continue
@@ -284,8 +349,8 @@ def normalize_aws_transaction_record(
     raw = {
         "hash": record.get("hash"),
         "blockNumber": record.get("block_number"),
-        "from": record.get("from_address", record.get("from")),
-        "to": record.get("to_address", record.get("to")),
+        "from": _aws_address(record.get("from_address", record.get("from"))),
+        "to": _aws_address(record.get("to_address", record.get("to"))),
         "value": _aws_quantity(record.get("value"), "value"),
         "gas": record.get("gas"),
         "gasPrice": _aws_quantity(record.get("gas_price"), "gas_price"),
@@ -311,7 +376,7 @@ def normalize_aws_log_record(
         "transactionHash": record.get("transaction_hash"),
         "logIndex": record.get("log_index"),
         "blockNumber": record.get("block_number"),
-        "address": record.get("address"),
+        "address": _aws_address(record.get("address")),
         "topics": record.get("topics"),
         "data": record.get("data"),
         "chainId": record.get("chain_id", 1),
@@ -328,9 +393,9 @@ def normalize_aws_token_transfer_record(
         "transactionHash": record.get("transaction_hash"),
         "logIndex": record.get("log_index"),
         "blockNumber": record.get("block_number"),
-        "tokenAddress": record.get("token_address"),
-        "from": record.get("from_address", record.get("from")),
-        "to": record.get("to_address", record.get("to")),
+        "tokenAddress": _aws_address(record.get("token_address")),
+        "from": _aws_address(record.get("from_address", record.get("from"))),
+        "to": _aws_address(record.get("to_address", record.get("to"))),
         "value": _aws_quantity(record.get("value"), "value"),
         "chainId": record.get("chain_id", 1),
         "source": "aws",
@@ -344,10 +409,10 @@ def normalize_aws_trace_record(
     """Normalize an AWS execution-trace row into the canonical schema."""
     raw = {
         "transactionHash": record.get("transaction_hash"),
-        "traceAddress": record.get("trace_address"),
+        "traceAddress": _aws_trace_address(record.get("trace_address")),
         "blockNumber": record.get("block_number"),
-        "from": record.get("from_address", record.get("from")),
-        "to": record.get("to_address", record.get("to")),
+        "from": _aws_address(record.get("from_address", record.get("from"))),
+        "to": _aws_address(record.get("to_address", record.get("to"))),
         "value": _aws_quantity(record.get("value"), "value"),
         "chainId": record.get("chain_id", 1),
         "source": "aws",
@@ -360,7 +425,7 @@ def normalize_aws_contract_record(
 ) -> dict[str, Any]:
     """Normalize an AWS contract row into the canonical schema."""
     raw = {
-        "address": record.get("address"),
+        "address": _aws_address(record.get("address")),
         "blockNumber": record.get("block_number"),
         "chainId": record.get("chain_id", 1),
         "source": "aws",

@@ -17,21 +17,25 @@
    - `collect --stage all` executes stages in deterministic dependency order (`abi` -> `logs` -> `transactions` -> `receipts` -> `prices` -> `public_sources`) and writes aggregated run summaries.
    - `--resume`, `--dry-run`, and versioned `--force` (preserving raw artifacts while archiving previous normalized outputs and resetting checkpoints) are operational in the CLI and context.
 
-3. **E4 AWS adapter is still a stub**
-   - `AwsPublicBlockchainAdapter` requires an injected `query` callable and does not access S3 or Parquet directly: `aws.py:8-28`
-   - No real partition reader, date/block pushdown, token-transfer, trace, or contract support is implemented.
+3. **E4 Concrete AWS Public Blockchain Adapter is complete**
+   - `AwsPublicBlockchainAdapter` reads anonymous S3 Parquet partitions from `s3://aws-public-blockchain/v1.0/eth/` and supports blocks, transactions, logs, token transfers, traces, and contracts.
+   - Date, block, transaction, and scoped-address filters are pushed into the dataset scan and enforced again during post-filtering.
+   - AWS rows are normalized into the shared schemas with source provenance, including ABI-padded addresses and serialized/null trace paths.
+   - RPC-equivalent verification and conflict reports are implemented for blocks, transactions, and logs; evidence-only reporting is used for tables without direct RPC equivalents.
+   - Focused AWS coverage passes, Euler logs reconcile 56 AWS records with 56 RPC records, and Kyber logs reconcile 581 AWS records with 581 RPC records. Kyber token transfers and traces also produce `GO` evidence-only reports.
 
 4. **E6 Audit is placeholder-based**
    - The CLI passes empty block, transaction, receipt, log, and ABI measurements to the audit: `cli.py:190-202`
    - Therefore the reported gate is not derived from collected artifacts.
 
-5. **E8 has not been demonstrated**
-   - There is no committed evidence of live Euler, Curve, or Kyber smoke runs.
-   - The notebook invokes full collection with `--stage all`; live smoke execution and artifact evidence remain pending: `DeFi_LSA_D2_Kaggle_Collection.ipynb:106-127`
+5. **E8 is partially demonstrated**
+   - Live Euler and Kyber AWS smoke reports are present for RPC-equivalent and evidence-only paths.
+   - Kyber contracts currently has no rows for the selected exploit block and therefore remains `NO_GO`; a broader verified contract window is still needed.
+   - Curve smoke, 100-block smoke, full event runs, and the notebook runtime remain pending: `DeFi_LSA_D2_Kaggle_Collection.ipynb:106-127`
 
 **Partial implementation**
 
 - **E2:** Source configuration and credential wiring are implemented. The CLI resolves the committed source configuration by default; shared probes cover RPC, Etherscan, CoinGecko, GDELT, AWS, and forums; response semantics, nested source settings, source enablement, and priority selection are validated; probes use the shared retry/rate-limit policy; and collection errors are redacted. Live connectivity verification, Kaggle runtime verification, credential-leak inspection across generated artifacts, and priority consumption for stages beyond the implemented logs path remain pending. The existing CoinGecko, Discourse, and GDELT adapters provide retry, persistence, normalization, and adapter-test coverage.
 - **E5:** ABI and proxy metadata hardening is complete. Etherscan V2 requests include `chainid=1`, shared retry/throttling and credential redaction are applied, raw responses and normalized ABIs are persisted, cache checksums and source URLs are validated, proxy implementations are resolved, local protocol-repository fallback is supported, and ABI coverage reports return `GO`, `CONDITIONAL_GO`, or `NO_GO`. The focused E5 suite and current test suite pass.
 - **E7:** Packaging extras, console entry point, and a Kaggle notebook exist. Disk-space checks, restored-output handling, and fully executable event runs are missing.
-**Verdict:** **E1 (Registry Completion), E2 (Source Configuration), E3 (CLI Orchestration), and E5 (ABI Hardening) are complete**, alongside partial E4, E6, E7, and E8 work. Remaining work is the concrete AWS adapter, artifact-derived D2 audit integration, Kaggle runtime validation, and live smoke/event runs.
+**Verdict:** **E1 (Registry Completion), E2 (Source Configuration), E3 (CLI Orchestration), E4 (Concrete AWS Adapter), and E5 (ABI Hardening) are complete**, alongside partial E6, E7, and E8 work. Remaining work is artifact-derived D2 audit integration, Kaggle runtime validation, Curve and broader live smoke coverage, and full event runs.

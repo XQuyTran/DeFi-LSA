@@ -10,6 +10,7 @@ from defi_lsa.aws import (
     normalize_aws_transaction_record,
     normalize_aws_trace_record,
     reconcile_source_records,
+    _post_filter_rows,
 )
 
 
@@ -59,6 +60,43 @@ def test_aws_query_seam_preserves_filters_and_table_contracts():
         "traces",
         "contracts",
     }
+
+
+def test_aws_block_filter_ignores_transaction_hash_without_block_column():
+    row = {
+        "number": 18630392,
+        "timestamp": 1700693711,
+        "gas_used": 1,
+        "hash": "0x" + "a" * 64,
+    }
+
+    assert _post_filter_rows(
+        [row],
+        AWS_TABLE_CONTRACTS["blocks"],
+        {
+            "start_block": 18630392,
+            "end_block": 18630392,
+            "transaction_hashes": ["0x" + "b" * 64],
+        },
+    ) == [
+        {
+            "number": 18630392,
+            "timestamp": 1700693711,
+            "gas_used": 1,
+            "hash": "0x" + "a" * 64,
+        }
+    ]
+
+
+def test_aws_transaction_filter_uses_transaction_hash_column():
+    matching = {"hash": "0x" + "a" * 64, "block_number": 12}
+    other = {"hash": "0x" + "b" * 64, "block_number": 12}
+
+    assert _post_filter_rows(
+        [matching, other],
+        AWS_TABLE_CONTRACTS["transactions"],
+        {"transaction_hashes": [matching["hash"]]},
+    ) == [matching]
 
 
 def test_aws_scope_filter_matches_sender_recipient_or_emitter():
@@ -162,6 +200,79 @@ def test_aws_extended_rows_preserve_exact_values_and_identity():
     assert trace["record_key"] == f"1:{tx_hash}:0.3.1"
     assert trace["to_address"] == ""
     assert contract["record_key"] == f"1:0x{'4' * 40}"
+
+
+def test_aws_extended_rows_unpad_abi_encoded_addresses():
+    padded_address = "0x" + "0" * 24 + "4d5f47fa6a74757f35c14fd3a6ef8e3c9bc514e8"
+
+    transfer = normalize_aws_token_transfer_record(
+        {
+            "transaction_hash": "0x" + "b" * 64,
+            "log_index": 0,
+            "block_number": 12,
+            "token_address": padded_address,
+            "from_address": padded_address,
+            "to_address": padded_address,
+            "value": 1,
+        },
+        "event",
+        "a" * 64,
+    )
+
+    expected_address = "0x" + padded_address[-40:].lower()
+    assert transfer["token_address"] == expected_address
+    assert transfer["from_address"] == expected_address
+
+
+def test_aws_trace_rows_parse_serialized_trace_address():
+    trace = normalize_aws_trace_record(
+        {
+            "transaction_hash": "0x" + "b" * 64,
+            "trace_address": "[0, 3, 1]",
+            "block_number": 12,
+            "from_address": "0x" + "2" * 40,
+            "to_address": "0x" + "3" * 40,
+            "value": 7,
+        },
+        "event",
+        "b" * 64,
+    )
+
+    assert trace["trace_address"] == (0, 3, 1)
+
+
+def test_aws_trace_rows_treat_null_trace_address_as_root():
+    trace = normalize_aws_trace_record(
+        {
+            "transaction_hash": "0x" + "b" * 64,
+            "trace_address": None,
+            "block_number": 12,
+            "from_address": "0x" + "2" * 40,
+            "to_address": "0x" + "3" * 40,
+            "value": 7,
+        },
+        "event",
+        "b" * 64,
+    )
+
+    assert trace["trace_address"] == ()
+    assert trace["record_key"].endswith(":root")
+
+
+def test_aws_trace_rows_parse_scalar_trace_address_encodings():
+    base = {
+        "transaction_hash": "0x" + "b" * 64,
+        "block_number": 12,
+        "from_address": "0x" + "2" * 40,
+        "to_address": "0x" + "3" * 40,
+        "value": 7,
+    }
+
+    for encoded in (b"[0, 3, 1]", 0, 0.0, "0.0", "{0;3;1}", "root"):
+        trace = normalize_aws_trace_record(
+            {**base, "trace_address": encoded}, "event", "b" * 64
+        )
+        assert trace["trace_address"] in {(0, 3, 1), (0,), ()}
 
 
 def test_aws_rpc_conflict_retains_both_source_records():
