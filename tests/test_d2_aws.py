@@ -4,8 +4,12 @@ from defi_lsa.aws import (
     AwsSchemaError,
     filter_aws_records_by_scope,
     normalize_aws_block_record,
+    normalize_aws_contract_record,
     normalize_aws_log_record,
+    normalize_aws_token_transfer_record,
     normalize_aws_transaction_record,
+    normalize_aws_trace_record,
+    reconcile_source_records,
 )
 
 
@@ -117,3 +121,67 @@ def test_aws_rows_use_canonical_record_shapes():
     assert block["source"] == "aws"
     assert transaction["record_key"] == "0x" + "b" * 64
     assert log["record_key"] == f"1:0x{'b' * 64}:0"
+
+
+def test_aws_extended_rows_preserve_exact_values_and_identity():
+    tx_hash = "0x" + "b" * 64
+    transfer = normalize_aws_token_transfer_record(
+        {
+            "transaction_hash": tx_hash,
+            "log_index": 4,
+            "block_number": 12,
+            "token_address": "0x" + "1" * 40,
+            "from": "0x" + "2" * 40,
+            "to": "0x" + "3" * 40,
+            "value": 2**255 + 1,
+        },
+        "event",
+        "a" * 64,
+    )
+    trace = normalize_aws_trace_record(
+        {
+            "transaction_hash": tx_hash,
+            "trace_address": [0, 3, 1],
+            "block_number": 12,
+            "from": "0x" + "2" * 40,
+            "to": None,
+            "value": 7,
+        },
+        "event",
+        "b" * 64,
+    )
+    contract = normalize_aws_contract_record(
+        {"address": "0x" + "4" * 40, "block_number": 12},
+        "event",
+        "c" * 64,
+    )
+
+    assert transfer["value_wei"] == 2**255 + 1
+    assert transfer["record_key"] == f"1:{tx_hash}:4"
+    assert trace["trace_address"] == (0, 3, 1)
+    assert trace["record_key"] == f"1:{tx_hash}:0.3.1"
+    assert trace["to_address"] == ""
+    assert contract["record_key"] == f"1:0x{'4' * 40}"
+
+
+def test_aws_rpc_conflict_retains_both_source_records():
+    aws_record = {
+        "record_key": "1:0x" + "a" * 64 + ":0",
+        "tx_hash": "0x" + "a" * 64,
+        "log_index": 0,
+        "data": "0x01",
+        "source": "aws",
+        "source_sha256": "a" * 64,
+    }
+    rpc_record = {
+        **aws_record,
+        "data": "0x02",
+        "source": "rpc",
+        "source_sha256": "b" * 64,
+    }
+
+    report = reconcile_source_records([aws_record], [rpc_record], "record_key")
+
+    assert report["status"] == "mismatch"
+    assert report["conflicts"][0]["primary"]["data"] == "0x01"
+    assert report["conflicts"][0]["secondary"]["data"] == "0x02"

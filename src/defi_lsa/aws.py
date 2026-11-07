@@ -1,13 +1,16 @@
 """Reader and normalization helpers for the AWS public blockchain dataset."""
 
 from dataclasses import asdict, dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
 
 from .schemas import (
     normalize_block_record,
+    normalize_contract_record,
     normalize_log_record,
+    normalize_token_transfer_record,
     normalize_transaction_record,
+    normalize_trace_record,
 )
 
 
@@ -29,13 +32,13 @@ class AwsTableContract:
 
 AWS_TABLE_CONTRACTS: dict[str, AwsTableContract] = {
     "blocks": AwsTableContract(
-        "blocks", ("block_number", "timestamp", "gas_used", "hash"), ("block_number",)
+        "blocks", ("number", "timestamp", "gas_used", "hash"), ("number",), block_column="number"
     ),
     "transactions": AwsTableContract(
         "transactions",
-        ("hash", "block_number", "from", "to", "value", "gas", "gas_price", "nonce"),
+        ("hash", "block_number", "from_address", "to_address", "value", "gas", "gas_price", "nonce"),
         ("hash",),
-        ("from", "to"),
+        ("from_address", "to_address"),
     ),
     "logs": AwsTableContract(
         "logs",
@@ -45,15 +48,15 @@ AWS_TABLE_CONTRACTS: dict[str, AwsTableContract] = {
     ),
     "token_transfers": AwsTableContract(
         "token_transfers",
-        ("transaction_hash", "log_index", "block_number", "token_address", "from", "to", "value"),
+        ("transaction_hash", "log_index", "block_number", "token_address", "from_address", "to_address", "value"),
         ("transaction_hash", "log_index"),
-        ("token_address", "from", "to"),
+        ("token_address", "from_address", "to_address"),
     ),
     "traces": AwsTableContract(
         "traces",
-        ("transaction_hash", "trace_address", "block_number", "from", "to", "value"),
+        ("transaction_hash", "trace_address", "block_number", "from_address", "to_address", "value"),
         ("transaction_hash", "trace_address"),
-        ("from", "to"),
+        ("from_address", "to_address"),
     ),
     "contracts": AwsTableContract(
         "contracts", ("address", "block_number"), ("address",), ("address",)
@@ -260,8 +263,8 @@ def normalize_aws_block_record(
 ) -> dict[str, Any]:
     """Normalize an AWS block row using the repository's canonical block schema."""
     raw = {
-        "number": record.get("block_number"),
-        "timestamp": record.get("timestamp"),
+        "number": record.get("number", record.get("block_number")),
+        "timestamp": _aws_timestamp(record.get("timestamp")),
         "gasUsed": record.get("gas_used"),
         "hash": record.get("hash"),
         "chainId": record.get("chain_id", 1),
@@ -281,11 +284,11 @@ def normalize_aws_transaction_record(
     raw = {
         "hash": record.get("hash"),
         "blockNumber": record.get("block_number"),
-        "from": record.get("from"),
-        "to": record.get("to"),
-        "value": record.get("value"),
+        "from": record.get("from_address", record.get("from")),
+        "to": record.get("to_address", record.get("to")),
+        "value": _aws_quantity(record.get("value"), "value"),
         "gas": record.get("gas"),
-        "gasPrice": record.get("gas_price"),
+        "gasPrice": _aws_quantity(record.get("gas_price"), "gas_price"),
         "nonce": record.get("nonce"),
         "chainId": record.get("chain_id", 1),
         "source": "aws",
@@ -315,6 +318,72 @@ def normalize_aws_log_record(
         "source": "aws",
     }
     return asdict(normalize_log_record(raw, event_id, source_sha256))
+
+
+def normalize_aws_token_transfer_record(
+    record: Mapping[str, Any], event_id: str, source_sha256: str
+) -> dict[str, Any]:
+    """Normalize an AWS token-transfer row into the canonical schema."""
+    raw = {
+        "transactionHash": record.get("transaction_hash"),
+        "logIndex": record.get("log_index"),
+        "blockNumber": record.get("block_number"),
+        "tokenAddress": record.get("token_address"),
+        "from": record.get("from_address", record.get("from")),
+        "to": record.get("to_address", record.get("to")),
+        "value": _aws_quantity(record.get("value"), "value"),
+        "chainId": record.get("chain_id", 1),
+        "source": "aws",
+    }
+    return asdict(normalize_token_transfer_record(raw, event_id, source_sha256))
+
+
+def normalize_aws_trace_record(
+    record: Mapping[str, Any], event_id: str, source_sha256: str
+) -> dict[str, Any]:
+    """Normalize an AWS execution-trace row into the canonical schema."""
+    raw = {
+        "transactionHash": record.get("transaction_hash"),
+        "traceAddress": record.get("trace_address"),
+        "blockNumber": record.get("block_number"),
+        "from": record.get("from_address", record.get("from")),
+        "to": record.get("to_address", record.get("to")),
+        "value": _aws_quantity(record.get("value"), "value"),
+        "chainId": record.get("chain_id", 1),
+        "source": "aws",
+    }
+    return asdict(normalize_trace_record(raw, event_id, source_sha256))
+
+
+def normalize_aws_contract_record(
+    record: Mapping[str, Any], event_id: str, source_sha256: str
+) -> dict[str, Any]:
+    """Normalize an AWS contract row into the canonical schema."""
+    raw = {
+        "address": record.get("address"),
+        "blockNumber": record.get("block_number"),
+        "chainId": record.get("chain_id", 1),
+        "source": "aws",
+    }
+    return asdict(normalize_contract_record(raw, event_id, source_sha256))
+
+
+def _aws_quantity(value: Any, field_name: str) -> int:
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(f"AWS {field_name} must be an integer-valued quantity")
+        return int(value)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    raise ValueError(f"AWS {field_name} must be an integer-valued quantity")
+
+
+def _aws_timestamp(value: Any) -> int:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return int(value.timestamp())
+    return _aws_quantity(value, "timestamp")
 
 
 def reconcile_source_records(primary: Iterable[Mapping[str, Any]], secondary: Iterable[Mapping[str, Any]], key: str) -> dict[str, Any]:

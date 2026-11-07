@@ -289,6 +289,64 @@ class OrchestrationTests(unittest.TestCase):
             self.assertEqual(result.records_written, 0)
             aws_adapter.fetch_table.assert_not_called()
 
+    def test_aws_verification_report_retains_mismatch_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(Path(tmp))
+            aws_record = {"record_key": "key", "data": "0x01", "source": "aws"}
+            rpc_record = {"record_key": "key", "data": "0x02", "source": "rpc"}
+
+            ctx._write_aws_verification_report(
+                "logs", [aws_record], [rpc_record], "record_key"
+            )
+            report = json.loads(
+                (ctx.reports_dir / "logs_aws_rpc_reconciliation.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            self.assertEqual(report["status"], "mismatch")
+            conflict = report["comparison"]["conflicts"][0]
+            self.assertEqual(conflict["primary"]["data"], "0x01")
+            self.assertEqual(conflict["secondary"]["data"], "0x02")
+
+    def test_aws_verification_report_marks_rpc_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(Path(tmp))
+            aws_record = {"record_key": "key", "source": "aws"}
+
+            ctx._write_aws_verification_report(
+                "transactions",
+                [aws_record],
+                [],
+                "record_key",
+                ["RPC verification unavailable"],
+            )
+            report = json.loads(
+                (ctx.reports_dir / "transactions_aws_rpc_reconciliation.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            self.assertEqual(report["status"], "unavailable")
+            self.assertEqual(report["comparison"]["missing_from_secondary"], ["key"])
+
+    def test_aws_verification_report_marks_missing_aws_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(Path(tmp))
+            rpc_record = {"record_key": "key", "source": "rpc"}
+
+            ctx._write_aws_verification_report(
+                "logs", [], [rpc_record], "record_key"
+            )
+            report = json.loads(
+                (ctx.reports_dir / "logs_aws_rpc_reconciliation.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            self.assertEqual(report["status"], "mismatch")
+            self.assertEqual(report["comparison"]["missing_from_primary"], ["key"])
+
     def test_collect_abi_cached_and_fetched(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -433,6 +491,12 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(args.source, "auto")
         self.assertTrue(args.resume)
         self.assertTrue(args.force)
+
+    def test_cli_accepts_extended_aws_stages(self) -> None:
+        parser = build_parser()
+        for stage in ("blocks", "token_transfers", "traces", "contracts"):
+            args = parser.parse_args(["collect", "--event", "euler", "--stage", stage])
+            self.assertEqual(args.stage, stage)
 
 
 if __name__ == "__main__":

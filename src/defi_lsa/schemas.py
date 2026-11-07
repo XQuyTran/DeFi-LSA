@@ -171,6 +171,57 @@ class LogRecord:
 
 
 @dataclass(frozen=True)
+class TokenTransferRecord:
+    """An ERC-20 transfer row normalized from the AWS dataset."""
+
+    record_key: str
+    event_id: str
+    chain_id: int
+    tx_hash: str
+    log_index: int
+    block_number: int
+    token_address: str
+    from_address: str
+    to_address: str
+    value_wei: int
+    source: str
+    source_sha256: str
+    normalization_version: str
+
+
+@dataclass(frozen=True)
+class TraceRecord:
+    """An EVM execution trace row normalized from the AWS dataset."""
+
+    record_key: str
+    event_id: str
+    chain_id: int
+    tx_hash: str
+    trace_address: tuple[int, ...]
+    block_number: int
+    from_address: str
+    to_address: str
+    value_wei: int
+    source: str
+    source_sha256: str
+    normalization_version: str
+
+
+@dataclass(frozen=True)
+class ContractRecord:
+    """A deployed contract row normalized from the AWS dataset."""
+
+    record_key: str
+    event_id: str
+    chain_id: int
+    address: str
+    block_number: int
+    source: str
+    source_sha256: str
+    normalization_version: str
+
+
+@dataclass(frozen=True)
 class PriceRecord:
     """A single token price observation normalized from an external price source.
 
@@ -239,6 +290,7 @@ _VALID_INCLUSION_REASONS = frozenset(
     {"direct_call", "scoped_log", "registry_anchor"}
 )
 _VALID_SOURCES_PUBLIC_INFO = frozenset({"discourse", "protocol", "gdelt"})
+_VALID_SOURCES_AWS = frozenset({"aws"})
 
 
 def _require(raw: dict[str, Any], key: str) -> Any:
@@ -589,6 +641,117 @@ def normalize_log_record(
         address=address,
         topics=topics,
         data=data,
+        source=source,
+        source_sha256=source_sha256,
+        normalization_version=NORMALIZATION_VERSION,
+    )
+
+
+def _validate_aws_context(event_id: str, source_sha256: str) -> None:
+    if not isinstance(event_id, str) or not event_id:
+        raise ValueError("event_id must be a non-empty string")
+    if not isinstance(source_sha256, str) or not source_sha256:
+        raise ValueError("source_sha256 must be a non-empty string")
+
+
+def _validate_aws_source(raw: dict[str, Any]) -> str:
+    source = _require(raw, "source")
+    if source not in _VALID_SOURCES_AWS:
+        raise ValueError(
+            f"invalid AWS source {source!r}: expected one of {sorted(_VALID_SOURCES_AWS)}"
+        )
+    return source
+
+
+def _normalize_trace_address(value: Any) -> tuple[int, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("trace_address must be a list or tuple")
+    normalized = []
+    for item in value:
+        parsed = parse_rpc_quantity(item)
+        if parsed < 0:
+            raise ValueError("trace_address values must be non-negative")
+        normalized.append(parsed)
+    return tuple(normalized)
+
+
+def normalize_token_transfer_record(
+    raw: dict[str, Any], event_id: str, source_sha256: str
+) -> TokenTransferRecord:
+    """Normalize an AWS token-transfer row with an exact uint256 amount."""
+    _validate_aws_context(event_id, source_sha256)
+    chain_id = parse_rpc_quantity(_require(raw, "chainId"))
+    tx_hash = normalize_tx_hash(_require(raw, "transactionHash"))
+    log_index = parse_rpc_quantity(_require(raw, "logIndex"))
+    block_number = parse_rpc_quantity(_require(raw, "blockNumber"))
+    token_address = normalize_address(_require(raw, "tokenAddress"))
+    from_address = normalize_address(_require(raw, "from"))
+    to_address = normalize_address(_require(raw, "to"))
+    value_wei = parse_rpc_quantity(_require(raw, "value"))
+    source = _validate_aws_source(raw)
+    return TokenTransferRecord(
+        record_key=f"{chain_id}:{tx_hash}:{log_index}",
+        event_id=event_id,
+        chain_id=chain_id,
+        tx_hash=tx_hash,
+        log_index=log_index,
+        block_number=block_number,
+        token_address=token_address,
+        from_address=from_address,
+        to_address=to_address,
+        value_wei=value_wei,
+        source=source,
+        source_sha256=source_sha256,
+        normalization_version=NORMALIZATION_VERSION,
+    )
+
+
+def normalize_trace_record(
+    raw: dict[str, Any], event_id: str, source_sha256: str
+) -> TraceRecord:
+    """Normalize an AWS execution-trace row with a deterministic call path."""
+    _validate_aws_context(event_id, source_sha256)
+    chain_id = parse_rpc_quantity(_require(raw, "chainId"))
+    tx_hash = normalize_tx_hash(_require(raw, "transactionHash"))
+    trace_address = _normalize_trace_address(_require(raw, "traceAddress"))
+    block_number = parse_rpc_quantity(_require(raw, "blockNumber"))
+    from_address = normalize_address(_require(raw, "from"))
+    raw_to = _require(raw, "to")
+    to_address = "" if raw_to is None or raw_to == "" else normalize_address(raw_to)
+    value_wei = parse_rpc_quantity(_require(raw, "value"))
+    source = _validate_aws_source(raw)
+    path = ".".join(str(item) for item in trace_address) or "root"
+    return TraceRecord(
+        record_key=f"{chain_id}:{tx_hash}:{path}",
+        event_id=event_id,
+        chain_id=chain_id,
+        tx_hash=tx_hash,
+        trace_address=trace_address,
+        block_number=block_number,
+        from_address=from_address,
+        to_address=to_address,
+        value_wei=value_wei,
+        source=source,
+        source_sha256=source_sha256,
+        normalization_version=NORMALIZATION_VERSION,
+    )
+
+
+def normalize_contract_record(
+    raw: dict[str, Any], event_id: str, source_sha256: str
+) -> ContractRecord:
+    """Normalize an AWS deployed-contract row."""
+    _validate_aws_context(event_id, source_sha256)
+    chain_id = parse_rpc_quantity(_require(raw, "chainId"))
+    address = normalize_address(_require(raw, "address"))
+    block_number = parse_rpc_quantity(_require(raw, "blockNumber"))
+    source = _validate_aws_source(raw)
+    return ContractRecord(
+        record_key=f"{chain_id}:{address}",
+        event_id=event_id,
+        chain_id=chain_id,
+        address=address,
+        block_number=block_number,
         source=source,
         source_sha256=source_sha256,
         normalization_version=NORMALIZATION_VERSION,

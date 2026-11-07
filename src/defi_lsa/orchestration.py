@@ -13,8 +13,12 @@ from typing import Any, Callable, Iterable
 from .checkpoints import Checkpoint, CheckpointStore, compute_scope_hash
 from .aws import (
     AwsPublicBlockchainAdapter,
+    normalize_aws_block_record,
+    normalize_aws_contract_record,
     normalize_aws_log_record,
+    normalize_aws_token_transfer_record,
     normalize_aws_transaction_record,
+    normalize_aws_trace_record,
     reconcile_source_records,
 )
 from .collectors import (
@@ -110,6 +114,22 @@ class CollectionContext:
     @property
     def transaction_index_path(self) -> Path:
         return normalized_path("transaction_index", self.event_id, self.output_root)
+
+    @property
+    def blocks_path(self) -> Path:
+        return normalized_path("blocks", self.event_id, self.output_root)
+
+    @property
+    def token_transfers_path(self) -> Path:
+        return normalized_path("token_transfers", self.event_id, self.output_root)
+
+    @property
+    def traces_path(self) -> Path:
+        return normalized_path("traces", self.event_id, self.output_root)
+
+    @property
+    def contracts_path(self) -> Path:
+        return normalized_path("contracts", self.event_id, self.output_root)
 
     @property
     def abi_dir(self) -> Path:
@@ -315,6 +335,10 @@ class CollectionContext:
                 "transactions": str(self.transactions_path),
                 "receipts": str(self.receipts_path),
                 "transaction_index": str(self.transaction_index_path),
+                "blocks": str(self.blocks_path),
+                "token_transfers": str(self.token_transfers_path),
+                "traces": str(self.traces_path),
+                "contracts": str(self.contracts_path),
                 "abi": str(self.abi_dir),
                 "prices": str(self.prices_path),
                 "discourse": str(self.discourse_path),
@@ -445,6 +469,53 @@ class CollectionContext:
                 except (KeyError, ValueError) as exc:
                     errors.append(f"invalid RPC log {tx_hash}: {exc}")
         return verified, errors
+
+    def collect_aws_table(self, table: str, source: str = "aws") -> CollectionResult:
+        """Collect and persist one AWS table with typed normalization."""
+        if source not in ("aws", "aws_public_blockchain"):
+            raise ValueError(f"AWS table collection requires an AWS source, got {source!r}")
+        paths = {
+            "blocks": self.blocks_path,
+            "token_transfers": self.token_transfers_path,
+            "traces": self.traces_path,
+            "contracts": self.contracts_path,
+        }
+        normalizers = {
+            "blocks": normalize_aws_block_record,
+            "token_transfers": normalize_aws_token_transfer_record,
+            "traces": normalize_aws_trace_record,
+            "contracts": normalize_aws_contract_record,
+        }
+        if table not in paths:
+            raise ValueError(f"unsupported extended AWS collection table {table!r}")
+        start_date = str(
+            self.event.get("collection_start_utc") or self.event.get("event_date_utc")
+        )[:10]
+        end_date = str(
+            self.event.get("collection_end_utc") or self.event.get("event_date_utc")
+        )[:10]
+        self._handle_force(table, [paths[table]])
+        rows = self.aws_adapter.fetch_table(
+            table,
+            start_date=start_date,
+            end_date=end_date,
+            start_block=self.start_block,
+            end_block=self.end_block,
+            addresses=self.scope.addresses,
+        )
+        source_sha = hashlib.sha256(
+            json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        records = [normalizers[table](row, self.event_id, source_sha) for row in rows]
+        written, skipped = append_normalized_records(
+            paths[table], records, key_field="record_key"
+        )
+        return CollectionResult(
+            paths[table],
+            written,
+            skipped,
+            source_sha256=source_sha,
+        )
 
     def collect_logs(self, source: str = "rpc") -> CollectionResult:
         """Collect adaptive RPC logs for the frozen event block window."""
@@ -868,6 +939,14 @@ class CollectionContext:
         results["transactions"] = self.collect_transactions(source="auto" if source == "auto" else source)
         # 4. Receipts
         results["receipts"] = self.collect_receipts(source="auto" if source == "auto" else source)
+        extended_tables = ("blocks", "token_transfers", "traces", "contracts")
+        should_collect_extended = source in ("aws", "aws_public_blockchain") or (
+            source == "auto"
+            and any(table in self.source_config.source_priority for table in extended_tables)
+        )
+        if should_collect_extended:
+            for table in extended_tables:
+                results[table] = self.collect_aws_table(table, source="aws")
         # 5. Prices
         results["prices"] = self.collect_prices(source="auto" if source == "auto" else source)
         # 6. Public Sources
