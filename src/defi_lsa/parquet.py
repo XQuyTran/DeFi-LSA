@@ -66,13 +66,24 @@ _UINT256_BINARY_FIELDS: frozenset[str] = frozenset({"value_wei"})
 # Fields that are stored as JSON arrays (topics, inclusion_reasons) — they
 # are serialised as JSON strings in JSONL and decoded back to lists for Arrow.
 _JSON_LIST_FIELDS: frozenset[str] = frozenset({"topics", "inclusion_reasons"})
+_JSON_INT_LIST_FIELDS: frozenset[str] = frozenset({"trace_address"})
 
 # ---------------------------------------------------------------------------
 # Supported schema names
 # ---------------------------------------------------------------------------
 
 _SUPPORTED_SCHEMAS: frozenset[str] = frozenset(
-    {"blocks", "transactions", "receipts", "logs", "prices", "public_info"}
+    {
+        "blocks",
+        "transactions",
+        "receipts",
+        "logs",
+        "prices",
+        "public_info",
+        "token_transfers",
+        "traces",
+        "contracts",
+    }
 )
 
 
@@ -99,7 +110,8 @@ def jsonl_to_parquet(
         jsonl_path: Path to the input JSONL file.
         schema_name: Which normalized schema this file contains.  Must be one
             of ``"blocks"``, ``"transactions"``, ``"receipts"``, ``"logs"``,
-            ``"prices"``, ``"public_info"``.
+            ``"prices"``, ``"public_info"``, ``"token_transfers"``,
+            ``"traces"``, or ``"contracts"``.
         output_path: Destination ``.parquet`` file (or directory when
             *partition_by* is set).
         partition_by: Optional list of column names to Hive-partition the
@@ -205,6 +217,12 @@ def jsonl_to_parquet(
             columns[field] = pa.array(
                 list_values, type=pa.list_(pa.string())
             )
+        elif field in _JSON_INT_LIST_FIELDS:
+            list_values = [
+                [int(item) for item in (json.loads(value) if isinstance(value, str) else (value or []))]
+                for value in raw_values
+            ]
+            columns[field] = pa.array(list_values, type=pa.list_(pa.int64()))
         else:
             # Default: string
             str_values = [str(v) if v is not None else "" for v in raw_values]

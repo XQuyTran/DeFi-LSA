@@ -156,6 +156,10 @@ def _collect_command(args: argparse.Namespace) -> int:
         if stage == "logs":
             res = context.collect_logs(source=args.source)
             written, skipped = res.records_written, res.records_skipped
+        elif stage in ("blocks", "token_transfers", "traces", "contracts"):
+            aws_source = "aws" if args.source == "auto" else args.source
+            res = context.collect_aws_table(stage, source=aws_source)
+            written, skipped = res.records_written, res.records_skipped
         elif stage == "transactions":
             res = context.collect_transactions(source=args.source)
             written, skipped = res.records_written, res.records_skipped
@@ -357,8 +361,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="logs",
         choices=(
             "logs",
+            "blocks",
             "transactions",
             "receipts",
+            "token_transfers",
+            "traces",
+            "contracts",
             "abi",
             "prices",
             "public_sources",
