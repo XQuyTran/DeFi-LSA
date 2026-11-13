@@ -24,9 +24,12 @@
    - RPC-equivalent verification and conflict reports are implemented for blocks, transactions, and logs; evidence-only reporting is used for tables without direct RPC equivalents.
    - Focused AWS coverage passes, Euler logs reconcile 56 AWS records with 56 RPC records, and Kyber logs reconcile 581 AWS records with 581 RPC records. Kyber token transfers and traces also produce `GO` evidence-only reports.
 
-4. **E6 Audit is placeholder-based**
-   - The CLI passes empty block, transaction, receipt, log, and ABI measurements to the audit: `cli.py:190-202`
-   - Therefore the reported gate is not derived from collected artifacts.
+4. **E6 Real D2 Audit and Gate Integration is complete**
+   - The audit loads checkpoints, JSONL, Parquet, ABI, price, public-source, and source-manifest artifacts and derives all gate measurements from persisted data.
+   - Registry consistency validates materialized contract scopes, token definitions, incident-leg transaction hashes, and event public-source configurations.
+   - Transaction, receipt, range, duplicate, ABI, token-level price, and query-level public-source coverage report exact gaps and corrective actions.
+   - Both JSON and human-readable Markdown reports are written for each audited event; source-manifest checks include checksums and credential leaks, and public-source copyright violations are gate-visible.
+   - `enforce_d2_gate()` blocks programmatic D3 execution on `NO_GO`; the CLI returns exit code 2 for `NO_GO` and for `CONDITIONAL_GO` when `--strict` is supplied.
 
 5. **E8 is partially demonstrated**
    - Live Euler and Kyber AWS smoke reports are present for RPC-equivalent and evidence-only paths.

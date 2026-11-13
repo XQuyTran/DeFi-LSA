@@ -5,6 +5,7 @@
 import argparse
 import json
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 
 from .collectors import ADAPTER_VERSION, collect_source_manifest
@@ -15,10 +16,16 @@ from .observability import CollectionMetrics
 from .audit import (
     audit_abi_coverage,
     audit_block_coverage,
+    audit_duplicate_records,
     audit_log_range_coverage,
+    audit_public_sources_coverage,
     audit_receipt_coverage,
     audit_registered_transaction_coverage,
+    audit_registry_consistency,
+    audit_source_manifest,
+    audit_token_price_coverage,
     build_d2_gate_report,
+    render_d2_gate_markdown,
 )
 from .checkpoints import CheckpointStore
 from .orchestration import CollectionContext
@@ -211,10 +218,31 @@ def _collect_command(args: argparse.Namespace) -> int:
         return 1
 
 
+def _resolve_run_root(output: Path, data_dir: Path | None) -> Path:
+    """Resolve the artifact collection root from CLI arguments.
+
+    Priority:
+    1. ``--data-dir`` if explicitly supplied.
+    2. ``output`` itself when it contains a ``data/`` or ``checkpoints/`` child.
+    3. ``output / "runs"`` as the conventional default.
+    """
+    if data_dir is not None:
+        return data_dir
+    if (output / "data").exists() or (output / "checkpoints").exists():
+        return output
+    if (output / "runs" / "data").exists() or (output / "runs" / "checkpoints").exists():
+        return output / "runs"
+    return output
+
+
 def _audit_command(args: argparse.Namespace) -> int:
-    run_root = args.output if (args.output / "data").exists() else (args.output / "runs")
+    cfg_root = _default_root()
+    data_dir = getattr(args, "data_dir", None)
+    run_root = _resolve_run_root(args.output, data_dir)
+
+    # ---- Load event registry ------------------------------------------------
     events_payload = json.loads(
-        (_default_root() / "configs" / "events.json").read_text(encoding="utf-8")
+        (cfg_root / "configs" / "events.json").read_text(encoding="utf-8")
     )
     if not isinstance(events_payload, list):
         raise ValueError("materialized events registry must be a JSON array")
@@ -231,51 +259,148 @@ def _audit_command(args: argparse.Namespace) -> int:
     event = selected_events[0]
     event_id = str(event["event_id"])
 
+    # ---- Load supporting registries -----------------------------------------
+    incident_legs_path = cfg_root / "configs" / "incident_legs.json"
+    incident_legs = (
+        [asdict(leg) for leg in load_incident_legs(incident_legs_path)]
+        if incident_legs_path.exists()
+        else []
+    )
+    token_registry = []
+    tokens_path = cfg_root / "configs" / "tokens.json"
+    if tokens_path.exists():
+        token_registry = json.loads(tokens_path.read_text(encoding="utf-8"))
+    public_source_registry = []
+    ps_path = cfg_root / "configs" / "public_sources.json"
+    if ps_path.exists():
+        public_source_registry = json.loads(ps_path.read_text(encoding="utf-8"))
+    contract_scopes = []
+    scopes_path = cfg_root / "configs" / "contract_scopes.json"
+    if scopes_path.exists():
+        contract_scopes = json.loads(scopes_path.read_text(encoding="utf-8"))
+
+    # ---- Canonical artifact paths -------------------------------------------
+    normalized = run_root / "data" / "raw" / "normalized"
+    logs_jsonl = normalized / "logs" / event_id
+    transactions_jsonl = normalized / "transactions" / event_id
+    receipts_jsonl = normalized / "receipts" / event_id
+    abi_dir = run_root / "data" / "raw" / "source" / "abi" / event_id
+    prices_jsonl = normalized / "prices" / "coingecko" / event_id
+    reports_dir = run_root / "reports" / event_id
+    manifest_path = reports_dir / "source_manifest.json"
+
+    checkpoint = CheckpointStore(run_root / "checkpoints").load_checkpoint(event_id, "logs")
+
+    # ---- Build complete registered tx hash set (event + all incident legs) --
+    exploit_hash = event.get("exploit_tx_hash")
+    tx_hashes: list[str] = [exploit_hash] if exploit_hash else []
+    for leg in incident_legs:
+        if str(leg.get("event_id", "")) == event_id:
+            leg_tx = str(leg.get("transaction_hash", ""))
+            if leg_tx and leg_tx.lower() not in {h.lower() for h in tx_hashes}:
+                tx_hashes.append(leg_tx)
+
+    # ---- Addresses for scope and ABI checks ---------------------------------
+    addresses = (
+        list(event.get("protocol_or_vulnerable_contracts", []))
+        + list(event.get("attack_contracts", []))
+        + list(event.get("attacker_addresses", []))
+    )
+    # Use the materialized ContractScope as the independent registry input.
+    scope_addresses = {
+        str(address).lower()
+        for scope in contract_scopes
+        if str(scope.get("event_id", "")) == event_id
+        for address in (scope.get("addresses") or [])
+    }
+
+    # ---- Run all audit checks -----------------------------------------------
     start_block = event.get("start_block")
     end_block = event.get("end_block")
-    logs_jsonl = run_root / "data" / "raw" / "normalized" / "logs" / f"{event_id}.jsonl"
-    transactions_jsonl = run_root / "data" / "raw" / "normalized" / "transactions" / f"{event_id}.jsonl"
-    receipts_jsonl = run_root / "data" / "raw" / "normalized" / "receipts" / f"{event_id}.jsonl"
-    abi_dir = run_root / "data" / "raw" / "source" / "abi" / event_id
-    checkpoint = CheckpointStore(run_root / "checkpoints").load_checkpoint(event_id, "logs")
 
     block = (
         audit_block_coverage(int(start_block), int(end_block), logs_jsonl)
         if start_block is not None and end_block is not None
         else {"missing_block_count": 1}
     )
-    tx_hashes = [event["exploit_tx_hash"]] if event.get("exploit_tx_hash") else []
     transactions = audit_registered_transaction_coverage(tx_hashes, transactions_jsonl)
     receipts = audit_receipt_coverage(tx_hashes, receipts_jsonl)
     logs = audit_log_range_coverage(checkpoint)
-    addresses = (
-        list(event.get("protocol_or_vulnerable_contracts", []))
-        + list(event.get("attack_contracts", []))
-        + list(event.get("attacker_addresses", []))
-    )
     abi = audit_abi_coverage(
-        [str(address) for address in addresses if str(address).strip()],
+        [str(a) for a in addresses if str(a).strip()],
         abi_dir,
     )
-    prices_present = (
-        run_root / "data" / "raw" / "normalized" / "prices" / "coingecko" / f"{event_id}.jsonl"
-    ).exists()
-    public_present = any(
-        (run_root / "data" / "raw" / "normalized" / source / f"{event_id}.jsonl").exists()
-        for source in ("discourse", "gdelt", "protocol")
+
+    # Token price coverage (artifact-derived)
+    prices = audit_token_price_coverage(
+        event=event,
+        token_registry=token_registry,
+        prices_path=prices_jsonl,
+        price_coverage_reports_dir=reports_dir,
     )
+
+    # Public source query-level coverage
+    public_sources = audit_public_sources_coverage(
+        event=event,
+        public_source_registry=public_source_registry,
+        normalized_base=normalized,
+    )
+
+    # Registry consistency
+    registry_consistency = audit_registry_consistency(
+        event=event,
+        scope_addresses=scope_addresses,
+        token_registry=token_registry,
+        incident_legs=incident_legs,
+        public_source_registry=public_source_registry,
+    )
+
+    # Duplicate record checks across key tables
+    total_duplicates = 0
+    duplicate_detail: dict[str, dict] = {}
+    duplicate_paths = {
+        "logs": normalized / "logs" / event_id,
+        "transactions": normalized / "transactions" / event_id,
+        "receipts": normalized / "receipts" / event_id,
+        "blocks": normalized / "blocks" / event_id,
+        "prices": normalized / "prices" / "coingecko" / event_id,
+    }
+    for schema, p in duplicate_paths.items():
+        dup = audit_duplicate_records(p, schema)
+        duplicate_detail[schema] = dup
+        total_duplicates += dup.get("duplicate_count", 0)
+    duplicates_summary = {
+        "total_duplicate_count": total_duplicates,
+        "by_schema": duplicate_detail,
+    }
+
+    # Source manifest integrity
+    source_manifest = audit_source_manifest(manifest_path)
+
+    # ---- Compile gate report (JSON + Markdown) ------------------------------
+    output_base = args.output / event_id
     report = build_d2_gate_report(
-        args.output / event_id / "d2_collection_audit.json",
+        output_base / "d2_collection_audit.json",
         block=block,
         transactions=transactions,
         receipts=receipts,
         logs=logs,
         abi=abi,
-        prices={"status": "conditional" if prices_present else "failed"},
-        public_sources={"status": "conditional" if public_present else "failed"},
+        prices=prices,
+        public_sources=public_sources,
+        registry_consistency=registry_consistency,
+        duplicates=duplicates_summary,
+        source_manifest=source_manifest,
     )
+    render_d2_gate_markdown(report, output_base / "d2_collection_audit.md")
+
     print(report["status"])
-    return 0 if report["status"] != "NO_GO" else 2
+    strict = getattr(args, "strict", False)
+    if report["status"] == "NO_GO":
+        return 2
+    if strict and report["status"] == "CONDITIONAL_GO":
+        return 2
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -385,6 +510,19 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--event", required=True)
     audit.add_argument("--stage", default="d2")
     audit.add_argument("--output", type=Path, default=root / "reports")
+    audit.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        dest="data_dir",
+        help="Explicit path to the collection root (data/, checkpoints/ parent). "
+             "Overrides automatic detection from --output.",
+    )
+    audit.add_argument(
+        "--strict",
+        action="store_true",
+        help="Treat CONDITIONAL_GO as failure (exit code 2).",
+    )
     audit.set_defaults(handler=_audit_command)
     return parser
 
