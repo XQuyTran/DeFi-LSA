@@ -247,11 +247,13 @@ def _audit_command(args: argparse.Namespace) -> int:
     )
     if not isinstance(events_payload, list):
         raise ValueError("materialized events registry must be a JSON array")
+    selector_aliases = {"kyber": "kyberswap"}
+    event_selector = selector_aliases.get(str(args.event).strip(), str(args.event).strip())
     selected_events = [
         item
         for item in events_payload
-        if item.get("event_id") == args.event
-        or str(item.get("event_id", "")).startswith(f"{args.event}_")
+        if item.get("event_id") == event_selector
+        or str(item.get("event_id", "")).startswith(f"{event_selector}_")
     ]
     if not selected_events:
         raise ValueError(f"No event matched: {args.event}")

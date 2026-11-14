@@ -907,6 +907,24 @@ class TestAuditCLI(unittest.TestCase):
             if result.stdout.strip() == "NO_GO":
                 self.assertEqual(result.returncode, 2)
 
+    def test_audit_accepts_kyber_event_alias(self, tmp_path=None):
+        """The audit command resolves the same Kyber alias as collection."""
+        import pathlib, subprocess, sys, tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            output_dir = pathlib.Path(td)
+            result = subprocess.run(
+                [sys.executable, "-m", "defi_lsa", "audit",
+                 "--event", "kyber",
+                 "--output", str(output_dir)],
+                capture_output=True, text=True,
+            )
+
+            self.assertNotIn("No event matched", result.stderr)
+            self.assertTrue(
+                (output_dir / "kyberswap_elastic_2023-11-22" / "d2_collection_audit.json").exists()
+            )
+
     def test_audit_strict_flag_fails_conditional(self, tmp_path=None):
         """--strict causes CONDITIONAL_GO to exit with code 2."""
         import tempfile, pathlib, subprocess, sys
