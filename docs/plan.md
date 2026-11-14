@@ -1,192 +1,432 @@
-# D2-A01–A18 Collection Hardening Plan
+Updated Plan for the Final 2 Weeks
+Mode: Implementation-ready
 
-## Problem and approach
+Decision: Freeze D2 feature development. Focus on producing a defensible research dataset and thesis results.
 
-The current D2 implementation has basic RPC, ABI, price-row, and public-information persistence, but it still has several production-readiness gaps:
+Current status indicates that:
 
-- `fetch_logs()` sends one entire block window in a single `eth_getLogs` request.
-- Existing collectors deduplicate records but do not persist progress or completed work units.
-- Transaction discovery is based only on top-level `from`/`to` addresses and misses router/multicall/proxy-mediated activity.
-- RPC and HTTP errors are not classified into retryable and permanent categories.
-- Price and public-information functions only persist supplied rows; they do not implement source adapters.
-- Source manifests derive retrieval time from file modification time and omit request/status/range/scope metadata.
-- JSONL appends are not crash-safe, and normalized/raw storage contracts are not separated.
-- There is no complete D2 coverage audit or command-line collection/resume/audit workflow.
+D1 Registry is complete.
+E2–E5 core collection infrastructure is effectively complete.
+E6 artifact-derived audit exists and produces D2 audit reports.
+Euler and Kyber smoke collections have successfully generated logs, transactions, receipts, checkpoints, ABI coverage reports, and D2 audit outputs.
+Curve remains non-executable because incident-leg verification is incomplete.
 
-Implement D2 as a source-preserving, resumable pipeline. Keep immutable source-shaped responses under `data/raw/source/`, write normalized JSONL records under `data/raw/normalized/`, and defer normalized Parquet conversion to A16. All collectors share identifier validation, request policy, checkpointing, provenance, structured errors, and deterministic fixture tests.
+Given the remaining schedule, the primary goal is no longer platform hardening; it is delivery of a research-quality dataset and thesis evidence package.
 
-## Scope and decisions
+1. Project Objective (Revised)
 
-- Cover the complete D2-A01–A18 backlog.
-- Adopt the `data/raw/source/` and `data/raw/normalized/` split. Source responses are immutable; normalized records reference their source artifact checksum.
-- Keep Ethereum Phase 1 scope and existing registry-derived `ContractScope` boundaries.
-- Keep Dune out of the critical path. AWS, Ethereum JSON-RPC, Etherscan, CoinGecko, public forum/protocol endpoints, and GDELT remain configurable sources.
-- Do not interpolate or force prices in D2. Missing/unsupported tokens produce explicit coverage gaps or conditional status.
-- Use transfer/source observations only; no silent fallback, fabricated data, or swallowed permanent errors.
-- Checkpoints are invalid when event, collector, requested range, or contract scope hash changes.
-- Raw artifacts are append-only/immutable by version; `--force` must create an explicit new version rather than overwrite prior raw data.
-- Every unrecoverable failure is recorded with event, collector, source, range, retry count, and machine-readable error taxonomy.
+Build a reproducible dataset and analysis pipeline capable of answering:
 
-## Workstreams and planned changes
+RQ1: How do DeFi security incidents affect user withdrawals and liquidity?
+RQ2: How much observed liquidity loss is attributable to attacker drains versus user reaction?
+RQ3: How does public information relate temporally to user capital flight?
 
-### A11 — Identifier validation and normalization
+The project will prioritize:
 
-- Add `normalize_address()`, `validate_address()`, `normalize_tx_hash()`, `validate_tx_hash()`, `parse_rpc_quantity()`, and `normalize_utc_timestamp()`.
-- Reject malformed identifiers and naive timestamps before persistence.
-- Preserve optional original checksummed values separately while using lowercase canonical lookup keys.
-- Replace ad hoc hash/address normalization in all current collectors and registry-derived scopes.
+Euler Finance as the primary case.
+KyberSwap Elastic (Ethereum-only scope) as the secondary case.
+Curve Finance Vyper Incident becomes an optional extension if registry completion is achieved on time.
+2. Scope Freeze
+Included
+Event 1
 
-### A04 — Shared request policy
+Euler Finance
 
-- Add `TransientSourceError`, `RateLimitError`, `AuthenticationError`, `InvalidRequestError`, `IncompleteResponseError`, and `PermanentSourceError`.
-- Add `classify_source_error()`, bounded exponential backoff with jitter, `Retry-After` handling, configurable attempts, and rate limiting.
-- Apply one policy to JSON-RPC, Etherscan, CoinGecko, forum, protocol, GDELT, and AWS adapters.
-- Redact credentials from URLs, parameters, exception messages, logs, and manifests.
-- Emit machine-readable exhausted-retry records without retrying authentication or malformed-request failures indefinitely.
+Collection window:
+T-14 days → T+7 days
 
-### A02 — Persistent checkpoints
 
-- Create `CheckpointStore` with `load_checkpoint()`, atomic `save_checkpoint_atomic()`, `mark_range_completed()`, `mark_range_failed()`, `get_pending_ranges()`, and `validate_checkpoint_scope()`.
-- Store event ID, collector, scope hash, requested range, completed ranges, failed ranges, timestamp, adapter version, and failure details.
-- Use temporary-file write, flush/fsync where applicable, and atomic replacement.
-- Integrate checkpoints into block, transaction, receipt, and log collectors.
-- Ensure resumed jobs do not query verified completed ranges; failed ranges remain failed until explicitly retried.
+Primary dataset.
 
-### A01 — Adaptive chunked log collection
+Event 2
 
-- Add `fetch_logs_chunked()` with configurable initial/minimum/maximum chunk sizes.
-- Query only the current chunk, persist successful logs immediately, mark the range completed, then continue.
-- Shrink chunks after timeout, response-limit, range-limit, or provider errors; grow after successful low-volume responses within configured bounds.
-- Stop at minimum chunk size on persistent failure and record the irrecoverable range.
-- Store normalized logs at `data/raw/normalized/logs/{event_id}.jsonl`.
-- Write checkpoint at `data/checkpoints/{event_id}/logs.json` and range report at `reports/{event_id}/log_range_report.json`.
-- Canonical log key is `(chain_id, tx_hash, log_index)` and must remain duplicate-free across retries/resumes.
+KyberSwap Elastic
 
-### A03 — Scope-aware transaction discovery
+Ethereum only
 
-- Add `discover_scoped_transaction_hashes()` using scoped logs as the primary source.
-- Add registered exploit/recovery/evidence transaction hashes from incident-leg configuration.
-- Add optional direct top-level calls to scoped addresses even if no logs are emitted.
-- Add `fetch_transactions_by_hash()` and `collect_scoped_transactions()` to retrieve transactions and receipts after hash discovery.
-- Emit inclusion reasons: `direct_call`, `scoped_log`, and `registry_anchor`.
-- Write `data/raw/normalized/transaction_index/{event_id}.jsonl` and `data/raw/normalized/transactions/{event_id}.jsonl`.
-- Require every scoped log to resolve to a transaction and receipt; require every registered exploit transaction to be present.
 
-### A05 — CoinGecko price adapter
+Secondary dataset.
 
-- Add `CoinGeckoAdapter.fetch_market_chart_range()` with source-response persistence, range handling, pagination/interval behavior, UTC normalization, and request provenance.
-- Emit normalized fields: event ID, token address, CoinGecko ID, source timestamp, hour UTC, USD price, source, and retrieval timestamp.
-- Collect the configured `T-14` through `T+7` research window plus buffer.
-- Write source responses under `data/raw/source/coingecko/` and normalized records under `data/raw/normalized/prices/coingecko/`.
-- Generate per-token coverage reports, duplicate checks, and maximum consecutive-gap metrics.
-- Preserve returned stablecoin values; do not force them to 1 USD.
+Deferred
+Event 3
 
-### A06 — Public-information adapters
+Curve Finance Vyper Incident
 
-- Add a Discourse adapter using public JSON endpoints first, with pagination, topic/post normalization, edited timestamps, canonical URLs, and inaccessible-content error records.
-- Add protocol announcement/feed metadata collection restricted to registry-configured official domains and rules; store metadata/permitted excerpts only.
-- Add GDELT query and normalization using registry-defined event aliases, keywords, time windows, canonical URLs, domains, languages, and deduplication rules.
-- Write source responses separately from normalized forum, announcement, and news records.
-- Ensure full copyrighted article text is never stored.
+Remain:
 
-### A07 — D2 collection audit
+Conditional GO
 
-- Add `audit_block_coverage()`, `audit_registered_transaction_coverage()`, `audit_receipt_coverage()`, `audit_log_range_coverage()`, `audit_abi_coverage()`, `audit_price_coverage()`, and `audit_public_source_coverage()`.
-- Add `build_d2_gate_report()` producing JSON and Markdown reports.
-- Report requested/collected/missing blocks, registered and missing exploit transactions, missing receipts, duplicate logs, ABI percentage, per-token price coverage/gaps, public-source status, failed ranges, checkpoint state, and corrective actions.
-- Return `GO`, `CONDITIONAL_GO`, or `NO_GO`; D3 must refuse to start on `NO_GO`.
-- Make audits rerunnable without recollecting data.
 
-### A10 — Provenance and source manifest semantics
+until all incident legs are verified.
 
-- Replace modification-time-derived retrieval provenance with request-time capture.
-- Expand records with source name, adapter version, method, URL, redacted parameter hash, requested/completed timestamps, HTTP status, response/artifact checksums, artifact path, record count, block range, event ID, and scope hash.
-- Keep manifests deterministic for fixed inputs apart from explicitly runtime-generated fields.
-- Include checkpoint and failed-range references in collection audit output.
+3. Revised Phase Structure
+Phase A
+Complete D2 Operational Closure
 
-### A13 — Source configuration contracts
+Phase B
+D3 Event Decoding & Classification
 
-- Add a validated configuration file for RPC, Etherscan, CoinGecko, GDELT, AWS, forum/protocol endpoints, timeout, attempts, rate limits, and log chunk bounds.
-- Resolve secrets only through environment variables and validate required variables at command startup.
-- Distinguish unavailable optional sources as explicit conditional status rather than silently disabling them.
+Phase C
+D4 Flow & Liquidity Reconstruction
 
-### A14 — D2 CLI
+Phase D
+D5 Dataset Freeze
 
-- Add:
-  - `python -m defi_lsa connectivity --event <event>`
-  - `python -m defi_lsa collect --event <event> --source rpc`
-  - `python -m defi_lsa collect --event <event> --stage logs --resume`
-  - `python -m defi_lsa audit --event <event> --stage d2`
-- Add unique run IDs, structured run summaries, dry-run scope/request output, resume validation, non-zero unrecoverable failure exits, and explicit versioning for force behavior.
-- Preserve existing registry and source-manifest commands.
+Phase E
+Research Analysis & Thesis
 
-### A08 — AWS public blockchain adapter
+Phase A — D2 Operational Closure
+Goal
 
-- Add partition discovery and filtered Ethereum block/transaction/log retrieval.
-- Normalize AWS records into the same contracts as RPC while preserving source identity.
-- Support source selection and configured primary/fallback order.
-- Produce source-conflict reports instead of overwriting conflicting records.
+Produce at least one complete event dataset.
 
-### A09 — Raw/normalized separation
+Remaining Tasks
+A1
 
-- Move current persistence helpers toward immutable source artifacts plus normalized records with source SHA-256 references.
-- Add normalization version independently from adapter version.
-- Ensure normalization changes can be rerun from source artifacts without refetching.
+Euler Full Collection
 
-### A12 — Crash-safe JSONL persistence
+Owner:
 
-- Replace direct append-only writes with verified batch persistence.
-- Validate existing JSONL lines on reopen, detect malformed trailing records, quarantine corruption explicitly, and preserve valid prior rows.
-- Flush/fsync and atomically commit temporary batches where appropriate.
-- Add interruption/resume tests verifying readable artifacts and stable counts.
+Data Engineer
 
-### A15 — Cross-source reconciliation
 
-- Add event-level samples comparing RPC, Etherscan, and AWS records.
-- Compare transaction hash, block number, receipt status, and log identities.
-- Produce a reconciliation report for differences; never silently choose an authoritative source.
+Actions:
 
-### A16 — Normalized Parquet conversion (P1, moved earlier)
+python -m defi_lsa collect \
+  --event euler \
+  --stage all \
+  --source auto \
+  --resume
 
-- Add explicit schemas and JSONL-to-Parquet conversion after normalized D2 collection.
-- Partition by event ID, source, and block date.
-- Preserve integer quantities exactly and verify row-count/duplicate invariants.
-- Make D3 consume normalized Parquet rather than reparsing source JSON.
-- Implement the parsing and schema layer before source-specific adapters so every
-  collector has a fixed normalized output contract and can be tested against
-  deterministic local fixtures.
 
-### A17 — Collection observability
+Output:
 
-- Emit structured metrics: requests, failures, rate limits, records received/written/skipped, current block, completed percentage, bytes written, retries, and final status.
-- Redact secrets and include event/source/collector/range on every error.
-- Always write a final run summary, including failed runs.
+raw logs
+transactions
+receipts
+ABI
+audit
 
-### A18 — Deterministic fixture integration tests
 
-- Add fixtures for direct calls, router-mediated calls, exploit transactions, multi-log receipts, duplicates, rate limits, incomplete prices, and forum pagination.
-- Ensure CI performs no live API requests.
-- Verify deterministic counts/checksums and expected D2 gate status.
-- Cover success/failure paths for every P0 adapter and resume/checkpoint behavior.
+Acceptance:
 
-## Execution order and dependencies
+D2 audit = GO
+or approved CONDITIONAL_GO
 
-1. A11 identifiers.
-2. A09 raw/normalized storage contracts and A12 crash-safe persistence.
-3. **A16 Parquet parsing/conversion (P1):** establish schemas, parsing,
-   partitioning, integer preservation, and local fixture verification before
-   live/source adapters.
-4. A04 request/error policy.
-5. A02 persistent checkpoints.
-6. A01 adaptive chunked logs.
-7. A03 scope-aware transaction/receipt discovery.
-8. A05 CoinGecko and A06 public-information adapters.
-9. A10 provenance semantics and A13 source configuration.
-10. A07 coverage audit and A14 CLI orchestration.
-11. A08 AWS adapter.
-12. A15 cross-source reconciliation and A17 observability.
-13. A18 deterministic end-to-end fixture suite and final D2 gate verification.
+A2
 
-## Completion criteria
+Artifact Validation
 
-D2 is complete when all registered event scopes can run the configured connectivity/collection flow; all requested block/log ranges are marked completed or failed; no failed range is hidden; registered exploit transactions and receipts are present; router-mediated transactions are retained; required ABIs and price/public-source statuses are explicit; source manifests contain request-time provenance; raw artifacts are immutable and resumable; canonical duplicates are zero; the D2 audit returns `GO` or an explicitly justified `CONDITIONAL_GO`; and the deterministic fixture suite passes without live API calls or credential leakage.
+Verify:
+
+receipts exist
+
+transactions exist
+
+logs exist
+
+ABI coverage report exists
+
+source manifests exist
+
+
+Acceptance:
+
+No hidden failed ranges
+
+A3
+
+Resume Verification
+
+Run collection twice.
+
+Acceptance:
+
+Second run does not recollect
+completed ranges
+
+A4
+
+Kyber Full Collection
+
+Same acceptance as Euler.
+
+Ethereum-only scope.
+
+Phase B — D3 Event Decoding & Classification
+Goal
+
+Transform raw blockchain records into research events.
+
+D3.1 Decode Events
+
+Implement:
+
+decode_event_logs()
+decode_function_input()
+
+
+Output:
+
+decoded_events.parquet
+
+
+Acceptance:
+
+100% exploit transactions decoded
+
+D3.2 Transaction Classification
+
+Labels:
+
+deposit
+withdrawal
+swap
+flash_loan
+exploit
+recovery
+unknown
+
+
+Output:
+
+classified_transactions.parquet
+
+
+Acceptance:
+
+Unknown flow ≤ 5%
+
+D3.3 Actor Classification
+
+Roles:
+
+attacker
+whitehat
+protocol
+user
+unknown
+
+
+Acceptance:
+
+All exploit paths classified
+
+Phase C — D4 Flow & Liquidity Reconstruction
+Goal
+
+Create research variables.
+
+D4.1 UserNetOutflow
+
+Formula:
+
+Withdrawals - Deposits
+excluding attacker actors
+
+
+Output:
+
+user_net_outflow_hourly.parquet
+
+D4.2 Attacker Flow
+
+Output:
+
+attacker_flow_hourly.parquet
+
+D4.3 Liquidity Series
+
+Because CoinGecko remains disabled in runtime configuration and audit currently accepts this as a documented conditional status, liquidity should initially be expressed in token units rather than USD-adjusted liquidity.
+
+Required:
+
+WETH balances
+USDC balances
+WBTC balances
+...
+
+
+Optional:
+
+Chainlink prices
+DEX-derived prices
+
+
+if time permits.
+
+D4.4 Hourly Panel
+
+Output:
+
+hourly_panel.parquet
+
+
+Columns:
+
+hour_utc
+user_net_outflow
+attacker_flow
+token_balance
+forum_count
+news_count
+
+Phase D — D5 Dataset Freeze
+Goal
+
+Produce defendable research datasets.
+
+D5.1 Quality Audit
+
+Checks:
+
+duplicate logs = 0
+
+missing exploit receipts = 0
+
+unknown_flow ≤ 5%
+
+D5.2 Dataset Freeze
+
+Outputs:
+
+dataset_euler_v1.parquet
+
+dataset_kyber_v1.parquet
+
+
+Plus:
+
+dataset_manifest.json
+
+data_dictionary.md
+
+D5.3 Data Readiness Gate
+
+Required:
+
+GO
+or approved CONDITIONAL_GO
+
+
+for frozen datasets.
+
+Phase E — Research Analysis
+Goal
+
+Produce thesis-ready evidence.
+
+E1
+
+Descriptive Event Analysis
+
+For:
+
+24h
+72h
+7d
+
+
+Compute:
+
+deposit volume
+
+withdrawal volume
+
+cumulative net outflow
+
+attacker drain
+
+recovery flow
+
+E2
+
+Baseline Comparison
+
+Minimum:
+
+Before vs After
+
+
+Optional:
+
+OLS Event Dummy
+
+
+if time allows.
+
+E3
+
+Thesis Figures
+
+Produce:
+
+Hourly User Outflow
+Cumulative Outflow
+Attacker vs User Flow
+Liquidity Trend
+Event Timeline
+
+All charts must be generated from frozen datasets.
+
+Two-Week Schedule
+Days	Objective	Exit Condition1–2	Euler full D2	Audit GO
+3–4	D3 Euler	Unknown ≤5%
+5	D4 Euler	Hourly panel complete
+6	D5 Euler	Dataset frozen
+7–8	Kyber D2	Audit GO/Conditional GO
+9–10	D3 Kyber	Classification complete
+11	Baseline analysis	Tables generated
+12	Figures	Thesis charts complete
+13	Writing	Results section complete
+14	Rebuild + package	All artifacts reproducible
+De-scoped Items
+
+The following are no longer on the critical path:
+
+Additional D2 hardening
+
+More AWS enhancements
+
+CoinGecko integration
+
+Generic multi-source pricing
+
+Curve full implementation
+
+BSTS
+
+VAR
+
+Advanced counterfactual models
+
+Extended robustness suite
+
+Definition of Done
+
+The project is considered complete when:
+
+ Euler dataset frozen
+ Kyber dataset frozen or documented Conditional GO
+ D3 classification complete
+ D4 hourly panel complete
+ D5 quality audit passed
+ Figures generated automatically
+ Results reproducible from frozen artifacts
+ Thesis package prepared
+Final Recommendation
+
+For the remaining two weeks:
+
+Stop expanding D2.
+
+Finish Euler.
+
+Finish Kyber.
+
+Complete D3 → D4 → D5.
+
+Write the thesis.
+
+
+This provides the highest probability of delivering a defendable MSc project within the remaining schedule while leveraging the D2 infrastructure that has already been built and validated through smoke collection.
