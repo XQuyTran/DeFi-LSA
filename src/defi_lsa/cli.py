@@ -236,6 +236,23 @@ def _resolve_run_root(output: Path, data_dir: Path | None) -> Path:
     return resolve_output_root(output, data_dir)
 
 
+def _is_effective_range_overridden(
+    start_block: int | None,
+    end_block: int | None,
+    registry_start_block: int | None,
+    registry_end_block: int | None,
+) -> bool:
+    """Return whether effective audit bounds differ from registry bounds."""
+    if start_block is None or end_block is None:
+        return False
+    if registry_start_block is None or registry_end_block is None:
+        return True
+    return (
+        int(start_block) != int(registry_start_block)
+        or int(end_block) != int(registry_end_block)
+    )
+
+
 def _audit_command(args: argparse.Namespace) -> int:
     cfg_root = _default_root()
     data_dir = getattr(args, "data_dir", None)
@@ -392,6 +409,14 @@ def _audit_command(args: argparse.Namespace) -> int:
 
     # ---- Compile gate report (JSON + Markdown) ------------------------------
     output_base = args.output / event_id
+    registry_start_block = event.get("start_block")
+    registry_end_block = event.get("end_block")
+    range_overridden = _is_effective_range_overridden(
+        start_block,
+        end_block,
+        registry_start_block,
+        registry_end_block,
+    )
     report = build_d2_gate_report(
         output_base / "d2_collection_audit.json",
         block=block,
@@ -407,9 +432,9 @@ def _audit_command(args: argparse.Namespace) -> int:
         effective_range={
             "start_block": int(start_block) if start_block is not None else None,
             "end_block": int(end_block) if end_block is not None else None,
-            "registry_start_block": event.get("start_block"),
-            "registry_end_block": event.get("end_block"),
-            "overridden": args.start_block is not None,
+            "registry_start_block": registry_start_block,
+            "registry_end_block": registry_end_block,
+            "overridden": range_overridden,
         },
     )
     render_d2_gate_markdown(report, output_base / "d2_collection_audit.md")

@@ -29,6 +29,7 @@ from defi_lsa.audit import (
     render_d2_gate_markdown,
 )
 from defi_lsa.checkpoints import Checkpoint
+from defi_lsa.cli import _is_effective_range_overridden
 
 
 # ---------------------------------------------------------------------------
@@ -784,6 +785,17 @@ class TestBuildD2GateReport(unittest.TestCase):
             })
             self.assertIn("source_manifest_valid", report["checks"])
             self.assertTrue(report["checks"]["source_manifest_valid"])
+
+
+class TestEffectiveAuditRange(unittest.TestCase):
+    def test_registry_range_is_not_overridden(self):
+        self.assertFalse(_is_effective_range_overridden(100, 110, 100, 110))
+
+    def test_checkpoint_smoke_range_is_overridden_without_cli_flags(self):
+        self.assertTrue(_is_effective_range_overridden(100, 100, 100, 110))
+
+    def test_range_is_overridden_when_registry_bounds_are_missing(self):
+        self.assertTrue(_is_effective_range_overridden(100, 100, None, None))
 
 
 class TestRenderD2GateMarkdown(unittest.TestCase):
