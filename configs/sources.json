@@ -39,11 +39,11 @@
     }
   },
   "coingecko": {
-    "enabled": true,
+    "enabled": false,
     "base_url": "https://api.coingecko.com/api/v3",
     "api_key_env": "COINGECKO_API_KEY",
     "api_key_header": "x-cg-demo-api-key",
-    "allow_keyless": true,
+    "allow_keyless": false,
     "market_chart_range_path": "/coins/{coin_id}/market_chart/range",
     "requests_per_minute_keyless": 10
   },

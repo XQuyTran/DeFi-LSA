@@ -31,14 +31,22 @@
    - Both JSON and human-readable Markdown reports are written for each audited event; source-manifest checks include checksums and credential leaks, and public-source copyright violations are gate-visible.
    - `enforce_d2_gate()` blocks programmatic D3 execution on `NO_GO`; the CLI returns exit code 2 for `NO_GO` and for `CONDITIONAL_GO` when `--strict` is supplied.
 
-5. **E8 is partially demonstrated**
-   - Live Euler and Kyber AWS smoke reports are present for RPC-equivalent and evidence-only paths.
-   - Kyber contracts currently has no rows for the selected exploit block and therefore remains `NO_GO`; a broader verified contract window is still needed.
-   - Curve smoke, 100-block smoke, full event runs, and the notebook runtime remain pending: `DeFi_LSA_D2_Kaggle_Collection.ipynb:106-127`
+5. **E8 smoke execution is implemented and partially demonstrated**
+   - Live Euler and Kyber smoke collections run through the Kaggle workflow with isolated one-block and 100-block output roots, checkpoints, resume support, and D2 audit reports.
+   - CoinGecko is intentionally disabled because unauthenticated historical requests return HTTP 401; smoke audits may therefore report an explicitly approved `CONDITIONAL_GO`.
+   - Kyber range verification is instrumented in the notebook: it compares normalized log counts and block-number distributions between one-block and 100-block runs.
+   - The audit CLI accepts the `kyber` alias and reports effective ranges, including whether the range differs from registry bounds.
+   - Curve smoke, full event runs, and the broader Kyber contracts window remain pending. Kyber contracts has no rows for the selected exploit block and remains `NO_GO` for that table.
+
+6. **E7 runtime and Kaggle workflow are implemented**
+   - Runtime preflight checks output-root writability and free space, detects restored roots, and records redacted results in collection summaries.
+   - Collection and audit commands support paired effective block-range overrides; checkpoints and D2 reports distinguish smoke bounds from registry bounds.
+   - The Kaggle notebook selects restored output, installs the package, verifies imports, disables CoinGecko explicitly, runs isolated Euler/Kyber smoke roots, validates Kyber range sensitivity, and summarizes generated audit reports.
+   - The notebook keeps full runs disabled until smoke gates and registry prerequisites pass.
 
 **Partial implementation**
 
 - **E2:** Source configuration and credential wiring are implemented. The CLI resolves the committed source configuration by default; shared probes cover RPC, Etherscan, CoinGecko, GDELT, AWS, and forums; response semantics, nested source settings, source enablement, and priority selection are validated; probes use the shared retry/rate-limit policy; and collection errors are redacted. Live connectivity verification, Kaggle runtime verification, credential-leak inspection across generated artifacts, and priority consumption for stages beyond the implemented logs path remain pending. The existing CoinGecko, Discourse, and GDELT adapters provide retry, persistence, normalization, and adapter-test coverage.
 - **E5:** ABI and proxy metadata hardening is complete. Etherscan V2 requests include `chainid=1`, shared retry/throttling and credential redaction are applied, raw responses and normalized ABIs are persisted, cache checksums and source URLs are validated, proxy implementations are resolved, local protocol-repository fallback is supported, and ABI coverage reports return `GO`, `CONDITIONAL_GO`, or `NO_GO`. The focused E5 suite and current test suite pass.
-- **E7:** Packaging extras, console entry point, and a Kaggle notebook exist. Disk-space checks, restored-output handling, and fully executable event runs are missing.
-**Verdict:** **E1 (Registry Completion), E2 (Source Configuration), E3 (CLI Orchestration), E4 (Concrete AWS Adapter), and E5 (ABI Hardening) are complete**, alongside partial E6, E7, and E8 work. Remaining work is artifact-derived D2 audit integration, Kaggle runtime validation, Curve and broader live smoke coverage, and full event runs.
+- **E7:** Packaging, console entry point, runtime preflight, restored-root selection, notebook bootstrap, and smoke orchestration are implemented. A fresh-session destroy/export/restore/resume validation was not executed; this is an accepted operational risk.
+**Verdict:** **E1 (Registry Completion), E2 (Source Configuration), E3 (CLI Orchestration), E4 (Concrete AWS Adapter), E5 (ABI Hardening), and E7 (Runtime/Packaging) are implemented. E8 is partially demonstrated through Euler and Kyber smoke runs.** Accepted risks are the skipped fresh-session restore test, disabled CoinGecko price coverage, incomplete Curve registry readiness, Kyber contract-window coverage, and unexecuted full event runs. These risks are accepted for the current D2 status and do not constitute evidence that Curve or full-event datasets are ready for D3.

@@ -155,6 +155,45 @@ class OrchestrationTests(unittest.TestCase):
             self.assertIn("0x47ac3527d02e6b9631c77fad1cdee7bfa77a8a7bfd4880dccbda5146ace4088f", plan["registered_tx_hashes"])
             self.assertIn("logs", plan["paths"])
 
+    def test_dry_run_plan_uses_effective_range_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(
+                Path(tmp),
+                dry_run=True,
+                requested_start_block=16818024,
+                requested_end_block=16818024,
+            )
+
+            plan = ctx.dry_run_plan()
+
+            self.assertEqual(plan["start_block"], 16818024)
+            self.assertEqual(plan["end_block"], 16818024)
+            self.assertEqual(plan["registry_end_block"], 16818025)
+            self.assertTrue(plan["range_override"])
+
+    def test_from_files_requires_paired_range_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "supplied together"):
+                CollectionContext.from_files(
+                    "euler",
+                    events_path=Path("configs/events.json"),
+                    source_config=_make_context(Path(tmp)).source_config,
+                    output_root=Path(tmp),
+                    start_block=16818024,
+                )
+
+    def test_from_files_rejects_inverted_range_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "non-negative and ordered"):
+                CollectionContext.from_files(
+                    "euler",
+                    events_path=Path("configs/events.json"),
+                    source_config=_make_context(Path(tmp)).source_config,
+                    output_root=Path(tmp),
+                    start_block=16818025,
+                    end_block=16818024,
+                )
+
     def test_collect_logs_rpc_and_checkpoints(self) -> None:
         def rpc_handler(method: str, params: list[Any]) -> Any:
             if method == "eth_getLogs":
@@ -184,6 +223,26 @@ class OrchestrationTests(unittest.TestCase):
             cp = ctx.checkpoints.load_checkpoint(ctx.event_id, "logs")
             self.assertIsNotNone(cp)
             self.assertEqual(cp.completed_ranges, [(16818024, 16818025)])
+
+    def test_collect_logs_checkpoint_uses_effective_override(self) -> None:
+        def rpc_handler(method: str, params: list[Any]) -> Any:
+            if method == "eth_getLogs":
+                return []
+            raise AssertionError(f"unexpected rpc method {method}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(
+                Path(tmp),
+                rpc=rpc_handler,
+                requested_start_block=16818024,
+                requested_end_block=16818024,
+            )
+            ctx.collect_logs()
+
+            checkpoint = ctx.checkpoints.load_checkpoint(ctx.event_id, "logs")
+            self.assertIsNotNone(checkpoint)
+            self.assertEqual(checkpoint.requested_start, 16818024)
+            self.assertEqual(checkpoint.requested_end, 16818024)
 
     def test_collect_transactions_and_receipts(self) -> None:
         def rpc_handler(method: str, params: list[Any]) -> Any:
@@ -388,6 +447,18 @@ class OrchestrationTests(unittest.TestCase):
 
             self.assertGreater(res.records_written, 0)
             self.assertTrue(ctx.prices_path.exists())
+
+    def test_collect_prices_skips_disabled_coingecko(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            opener = MagicMock()
+            config = SourceConfig(enabled_sources={"coingecko": False})
+            ctx = _make_context(Path(tmp), source_config=config, opener=opener)
+
+            result = ctx.collect_prices(source="auto")
+
+            self.assertEqual(result.records_written, 0)
+            opener.assert_not_called()
+            self.assertFalse(ctx.prices_path.exists())
 
     def test_collect_public_sources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

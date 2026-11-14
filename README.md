@@ -1,6 +1,37 @@
 # DeFi-LSA
 Công nghệ Blockchain (IS6105.11.CH)
 
+## Runtime and smoke collection
+
+Use the workspace virtual environment on Windows:
+
+```powershell
+.venv\Scripts\python.exe -m pip install -e ".[dev,parquet,aws]"
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe -m defi_lsa --help
+```
+
+Smoke runs accept paired `--start-block` and `--end-block` overrides. They are
+recorded in checkpoints and D2 reports without changing the frozen registry:
+
+```powershell
+.venv\Scripts\python.exe -m defi_lsa collect --event euler --stage all `
+  --source auto --start-block 16818024 --end-block 16818024 `
+  --output reports\smoke\euler_one_block --resume
+.venv\Scripts\python.exe -m defi_lsa audit --event euler `
+  --output reports\smoke\euler_one_block --strict
+```
+
+Use separate output roots for one-block, 100-block, and registry-driven full
+runs. A valid restored root containing `data`, `checkpoints`, or `reports` is
+reused; collection preflight also checks free disk space and writability.
+
+The Kaggle notebook in `src/DeFi_LSA_D2_Kaggle_Collection.ipynb` loads
+credentials from Kaggle Secrets, installs the package, performs runtime and
+source checks, runs isolated Euler/Kyber smoke roots, and leaves full runs
+disabled until strict smoke audits pass. Credentials are never written to the
+runtime configuration or reports.
+
 ## Data-readiness pipeline
 
 The initial implementation is registry-first. It validates the candidate event list,

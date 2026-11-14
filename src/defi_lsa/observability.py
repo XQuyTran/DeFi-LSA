@@ -40,6 +40,7 @@ class CollectionMetrics:
     bytes_written: int = 0
     retry_count: int = 0
     status: str = "running"
+    runtime_preflight: dict[str, Any] = field(default_factory=dict)
     errors: list[dict[str, Any]] = field(default_factory=list)
 
     def record_error(self, error: Exception, **context: Any) -> None:
