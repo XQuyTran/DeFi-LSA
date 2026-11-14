@@ -39,7 +39,7 @@
     }
   },
   "coingecko": {
-    "enabled": true,
+    "enabled": false,
     "base_url": "https://api.coingecko.com/api/v3",
     "api_key_env": "COINGECKO_API_KEY",
     "api_key_header": "x-cg-demo-api-key",
