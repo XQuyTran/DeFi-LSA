@@ -133,6 +133,28 @@ class TestCoinGeckoAdapter(unittest.TestCase):
             saved_json = json.loads(artifact_path.read_text(encoding="utf-8"))
             self.assertEqual(saved_json["prices"], chart_payload["prices"])
 
+    def test_keyless_request_omits_api_key_header(self) -> None:
+        captured_headers: dict[str, str] = {}
+
+        def mock_opener(req: Any, timeout: float = 30) -> MockResponse:
+            captured_headers.update({key.lower(): value for key, value in req.headers.items()})
+            return MockResponse({"prices": []})
+
+        adapter = CoinGeckoAdapter(
+            api_key="",
+            opener=mock_opener,
+            retry_policy=RetryPolicy(max_attempts=1),
+            sleep_fn=lambda _: None,
+        )
+        adapter.fetch_market_chart_range(
+            coin_id=self.coin_id,
+            from_timestamp=1678665600,
+            to_timestamp=1678669200,
+        )
+
+        self.assertNotIn("x-cg-demo-api-key", captured_headers)
+        self.assertNotIn("x-cg-pro-api-key", captured_headers)
+
     def test_no_stablecoin_price_fabrication(self) -> None:
         # Crucial invariant: Stablecoin depegs (e.g. USDC at $0.88) must NOT be forced to 1.0!
         depegged_price = 0.8845
@@ -365,6 +387,23 @@ class TestCoinGeckoAdapter(unittest.TestCase):
                 to_timestamp=1678669200,
             )
         self.assertEqual(attempts, 1)
+
+    def test_keyless_401_explains_demo_key_requirement(self) -> None:
+        def unauthorized_opener(req: Any, timeout: float = 30) -> MockResponse:
+            raise make_http_error(401, message="Unauthorized")
+
+        adapter = CoinGeckoAdapter(
+            api_key="",
+            opener=unauthorized_opener,
+            retry_policy=RetryPolicy(max_attempts=1),
+            sleep_fn=lambda _: None,
+        )
+        with self.assertRaisesRegex(AuthenticationError, "COINGECKO_API_KEY"):
+            adapter.fetch_market_chart_range(
+                coin_id=self.coin_id,
+                from_timestamp=1678665600,
+                to_timestamp=1678669200,
+            )
 
 
 class TestDiscourseAdapter(unittest.TestCase):

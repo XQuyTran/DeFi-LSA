@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from defi_lsa.errors import SourceError
+from defi_lsa.errors import AuthenticationError, SourceError
 from defi_lsa.identifiers import normalize_address, normalize_utc_timestamp
 from defi_lsa.retry import (
     RateLimiter,
@@ -216,6 +216,12 @@ class CoinGeckoAdapter:
                     body = exc.read().decode("utf-8", errors="replace")
                 except Exception:
                     body = None
+                if exc.code == 401 and not self.api_key:
+                    raise AuthenticationError(
+                        "keyless request rejected; set COINGECKO_API_KEY for CoinGecko Demo access",
+                        source="coingecko",
+                        details={"status_code": exc.code},
+                    ) from exc
                 classified = classify_source_error(
                     exc,
                     status_code=exc.code,
