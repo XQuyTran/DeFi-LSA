@@ -802,6 +802,8 @@ class CollectionContext:
 
     def collect_prices(self, source: str = "coingecko") -> CollectionResult:
         """Collect and normalize hourly token prices from CoinGecko for registered tokens."""
+        if not self.source_config.source_enabled("coingecko"):
+            return CollectionResult(self.prices_path, 0, 0)
         if source == "auto" and "prices" in self.source_config.source_priority:
             source = self.source_config.select_source("prices", {"coingecko"})
 

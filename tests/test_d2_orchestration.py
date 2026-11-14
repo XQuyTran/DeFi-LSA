@@ -448,6 +448,18 @@ class OrchestrationTests(unittest.TestCase):
             self.assertGreater(res.records_written, 0)
             self.assertTrue(ctx.prices_path.exists())
 
+    def test_collect_prices_skips_disabled_coingecko(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            opener = MagicMock()
+            config = SourceConfig(enabled_sources={"coingecko": False})
+            ctx = _make_context(Path(tmp), source_config=config, opener=opener)
+
+            result = ctx.collect_prices(source="auto")
+
+            self.assertEqual(result.records_written, 0)
+            opener.assert_not_called()
+            self.assertFalse(ctx.prices_path.exists())
+
     def test_collect_public_sources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
