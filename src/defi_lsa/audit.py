@@ -834,6 +834,7 @@ def build_d2_gate_report(
     registry_consistency: Mapping[str, Any] | None = None,
     duplicates: Mapping[str, Any] | None = None,
     source_manifest: Mapping[str, Any] | None = None,
+    effective_range: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile measurements into a gate report JSON file and return the report dict.
 
@@ -942,6 +943,8 @@ def build_d2_gate_report(
         "prices": dict(prices),
         "public_sources": dict(public_sources),
     }
+    if effective_range is not None:
+        report["effective_range"] = dict(effective_range)
     if registry_consistency is not None:
         report["registry_consistency"] = dict(registry_consistency)
     if duplicates is not None:
@@ -969,6 +972,17 @@ def render_d2_gate_markdown(report: Mapping[str, Any], output_path: Path) -> Non
         "",
         f"**Status: {badge}**",
         "",
+    ]
+    effective_range = report.get("effective_range")
+    if isinstance(effective_range, Mapping):
+        lines += [
+            "## Collection Range",
+            "",
+            f"Effective blocks: `{effective_range.get('start_block')}` - `{effective_range.get('end_block')}`",
+            f"Registry blocks: `{effective_range.get('registry_start_block')}` - `{effective_range.get('registry_end_block')}`",
+            "",
+        ]
+    lines += [
         "## Checks",
         "",
         "| Check | Result |",

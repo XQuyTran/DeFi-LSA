@@ -82,6 +82,8 @@ class CollectionContext:
     resume: bool = False
     dry_run: bool = False
     force: bool = False
+    requested_start_block: int | None = None
+    requested_end_block: int | None = None
     version: str = "v1"
     incident_legs: tuple[IncidentLeg, ...] = field(default_factory=tuple)
     rpc: Callable[[str, list[Any]], Any] | None = None
@@ -93,11 +95,11 @@ class CollectionContext:
 
     @property
     def start_block(self) -> int:
-        return self._required_block("start_block")
+        return self._effective_block("start_block", self.requested_start_block)
 
     @property
     def end_block(self) -> int:
-        return self._required_block("end_block")
+        return self._effective_block("end_block", self.requested_end_block)
 
     @property
     def logs_path(self) -> Path:
@@ -221,6 +223,12 @@ class CollectionContext:
             )
         return int(value)
 
+    def _effective_block(self, name: str, override: int | None) -> int:
+        value = self._required_block(name) if override is None else override
+        if value < 0:
+            raise ValueError(f"{self.event_id}: {name} must be non-negative")
+        return value
+
     @classmethod
     def from_files(
         cls,
@@ -232,6 +240,8 @@ class CollectionContext:
         resume: bool = False,
         dry_run: bool = False,
         force: bool = False,
+        start_block: int | None = None,
+        end_block: int | None = None,
         incident_legs_path: Path | None = None,
         rpc: Callable[[str, list[Any]], Any] | None = None,
         opener: Callable[..., Any] | None = None,
@@ -254,6 +264,10 @@ class CollectionContext:
             raise ValueError(f"Event prefix is ambiguous: {event_id}")
         event = matches[0]
         event_id = str(event["event_id"])
+        if (start_block is None) != (end_block is None):
+            raise ValueError("start_block and end_block must be supplied together")
+        if start_block is not None and (start_block < 0 or end_block < start_block):
+            raise ValueError("start_block and end_block must be non-negative and ordered")
 
         legs: list[IncidentLeg] = []
         legs_file = incident_legs_path or (_default_root() / "configs" / "incident_legs.json")
@@ -289,6 +303,8 @@ class CollectionContext:
             resume=resume,
             dry_run=dry_run,
             force=force,
+            requested_start_block=start_block,
+            requested_end_block=end_block,
             incident_legs=tuple(legs),
             rpc=rpc,
             opener=opener,
@@ -325,8 +341,11 @@ class CollectionContext:
             "dry_run": True,
             "resume": self.resume,
             "force": self.force,
-            "start_block": self.event.get("start_block"),
-            "end_block": self.event.get("end_block"),
+            "start_block": self.start_block,
+            "end_block": self.end_block,
+            "registry_start_block": self.event.get("start_block"),
+            "registry_end_block": self.event.get("end_block"),
+            "range_override": self.requested_start_block is not None,
             "scope_addresses": list(self.scope.addresses),
             "registered_tx_hashes": list(self.registered_tx_hashes),
             "tokens_related": list(self.tokens_related),

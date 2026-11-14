@@ -32,6 +32,29 @@ def test_audit_gate_reports_corrective_actions(tmp_path):
     assert "missing_blocks" in report["corrective_actions"]
 
 
+def test_audit_gate_persists_effective_collection_range(tmp_path):
+    report = build_d2_gate_report(
+        tmp_path / "audit.json",
+        block={"missing_block_count": 0},
+        transactions={"missing_exploit_tx_count": 0},
+        receipts={"missing_receipt_count": 0},
+        logs={"checkpoint_present": True, "pending_log_ranges": [], "failed_log_ranges": []},
+        abi={"abi_coverage_percentage": 100.0},
+        prices={"status": "conditional"},
+        public_sources={"status": "conditional"},
+        effective_range={
+            "start_block": 10,
+            "end_block": 10,
+            "registry_start_block": 1,
+            "registry_end_block": 100,
+            "overridden": True,
+        },
+    )
+
+    assert report["effective_range"]["start_block"] == 10
+    assert json.loads((tmp_path / "audit.json").read_text())["effective_range"]["overridden"] is True
+
+
 def test_audit_gate_rejects_missing_log_checkpoint(tmp_path):
     report = build_d2_gate_report(
         tmp_path / "audit.json",

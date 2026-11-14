@@ -29,6 +29,7 @@ from .audit import (
 )
 from .checkpoints import CheckpointStore
 from .orchestration import CollectionContext
+from .runtime import preflight_output_root, resolve_output_root
 from .registry import (
     build_contract_scope,
     candidates_as_dicts,
@@ -138,16 +139,22 @@ def _collect_command(args: argparse.Namespace) -> int:
     config.validate()
     metrics = CollectionMetrics(event_id=args.event, collector=args.stage)
     context = None
+    output_root = resolve_output_root(args.output)
     try:
+        metrics.runtime_preflight = preflight_output_root(output_root)
+        if not metrics.runtime_preflight["passed"]:
+            raise RuntimeError("runtime preflight failed for collection output root")
         force = getattr(args, "force", False)
         context = CollectionContext.from_files(
             args.event,
             events_path=_default_root() / "configs" / "events.json",
             source_config=config,
-            output_root=args.output,
+            output_root=output_root,
             resume=args.resume,
             dry_run=args.dry_run,
             force=force,
+            start_block=args.start_block,
+            end_block=args.end_block,
         )
         if args.dry_run:
             plan = context.dry_run_plan()
@@ -200,7 +207,7 @@ def _collect_command(args: argparse.Namespace) -> int:
         metrics.run_id = context.run_id
         metrics.records_written = written
         metrics.records_skipped = skipped
-        summary = args.output / context.event_id / f"{context.run_id}.json"
+        summary = output_root / context.event_id / f"{context.run_id}.json"
         metrics.write_summary(summary)
         print(json.dumps({"run_id": context.run_id, "status": "completed", "records_written": written,
                           "records_skipped": skipped}, sort_keys=True))
@@ -208,7 +215,7 @@ def _collect_command(args: argparse.Namespace) -> int:
     except Exception as exc:
         metrics.record_error(exc, stage=args.stage, source=args.source)
         summary_event = context.event_id if context is not None else args.event
-        summary = args.output / summary_event / f"{metrics.run_id}.json"
+        summary = output_root / summary_event / f"{metrics.run_id}.json"
         metrics.write_summary(summary)
         print(json.dumps({
             "run_id": metrics.run_id,
@@ -226,13 +233,7 @@ def _resolve_run_root(output: Path, data_dir: Path | None) -> Path:
     2. ``output`` itself when it contains a ``data/`` or ``checkpoints/`` child.
     3. ``output / "runs"`` as the conventional default.
     """
-    if data_dir is not None:
-        return data_dir
-    if (output / "data").exists() or (output / "checkpoints").exists():
-        return output
-    if (output / "runs" / "data").exists() or (output / "runs" / "checkpoints").exists():
-        return output / "runs"
-    return output
+    return resolve_output_root(output, data_dir)
 
 
 def _audit_command(args: argparse.Namespace) -> int:
@@ -317,6 +318,16 @@ def _audit_command(args: argparse.Namespace) -> int:
     # ---- Run all audit checks -----------------------------------------------
     start_block = event.get("start_block")
     end_block = event.get("end_block")
+    if (args.start_block is None) != (args.end_block is None):
+        raise ValueError("audit start_block and end_block must be supplied together")
+    if args.start_block is not None:
+        if args.start_block < 0 or args.end_block < args.start_block:
+            raise ValueError("audit start_block and end_block must be non-negative and ordered")
+        start_block = args.start_block
+        end_block = args.end_block
+    elif checkpoint is not None:
+        start_block = checkpoint.requested_start
+        end_block = checkpoint.requested_end
 
     block = (
         audit_block_coverage(int(start_block), int(end_block), logs_jsonl)
@@ -391,6 +402,13 @@ def _audit_command(args: argparse.Namespace) -> int:
         registry_consistency=registry_consistency,
         duplicates=duplicates_summary,
         source_manifest=source_manifest,
+        effective_range={
+            "start_block": int(start_block) if start_block is not None else None,
+            "end_block": int(end_block) if end_block is not None else None,
+            "registry_start_block": event.get("start_block"),
+            "registry_end_block": event.get("end_block"),
+            "overridden": args.start_block is not None,
+        },
     )
     render_d2_gate_markdown(report, output_base / "d2_collection_audit.md")
 
@@ -504,6 +522,8 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--resume", action="store_true")
     collect.add_argument("--dry-run", action="store_true")
     collect.add_argument("--force", action="store_true")
+    collect.add_argument("--start-block", type=int)
+    collect.add_argument("--end-block", type=int)
     collect.set_defaults(handler=_collect_command)
 
     audit = subparsers.add_parser("audit", help="run the D2 readiness gate")
@@ -523,6 +543,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Treat CONDITIONAL_GO as failure (exit code 2).",
     )
+    audit.add_argument("--start-block", type=int)
+    audit.add_argument("--end-block", type=int)
     audit.set_defaults(handler=_audit_command)
     return parser
 

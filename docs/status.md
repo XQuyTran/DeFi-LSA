@@ -36,6 +36,12 @@
    - Kyber contracts currently has no rows for the selected exploit block and therefore remains `NO_GO`; a broader verified contract window is still needed.
    - Curve smoke, 100-block smoke, full event runs, and the notebook runtime remain pending: `DeFi_LSA_D2_Kaggle_Collection.ipynb:106-127`
 
+6. **E7/E8 implementation is in progress**
+   - Runtime preflight now checks output-root writability and free space, detects restored roots, and records redacted results in collection summaries.
+   - Collection and audit commands support paired effective block-range overrides; checkpoints and D2 reports distinguish smoke bounds from registry bounds.
+   - The Kaggle notebook now selects restored output, runs preflight, isolates one-block/100-block Euler and Kyber smoke roots, and blocks full runs until strict smoke audits pass.
+   - Live source probes, Curve registry completion, real smoke execution, and registry-driven full event runs remain execution-stage work requiring credentials and network access.
+
 **Partial implementation**
 
 - **E2:** Source configuration and credential wiring are implemented. The CLI resolves the committed source configuration by default; shared probes cover RPC, Etherscan, CoinGecko, GDELT, AWS, and forums; response semantics, nested source settings, source enablement, and priority selection are validated; probes use the shared retry/rate-limit policy; and collection errors are redacted. Live connectivity verification, Kaggle runtime verification, credential-leak inspection across generated artifacts, and priority consumption for stages beyond the implemented logs path remain pending. The existing CoinGecko, Discourse, and GDELT adapters provide retry, persistence, normalization, and adapter-test coverage.
