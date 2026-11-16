@@ -430,3 +430,497 @@ Write the thesis.
 
 
 This provides the highest probability of delivering a defendable MSc project within the remaining schedule while leveraging the D2 infrastructure that has already been built and validated through smoke collection.
+
+Mode: Implementation-ready
+Epic D6 – Behavioral Flow Anomaly Detection (Machine Learning Extension)
+Purpose
+
+Epic D6 bổ sung một thành phần Machine Learning cho luận văn mà:
+
+Không làm thay đổi câu hỏi nghiên cứu chính.
+Không phụ thuộc dữ liệu lớn.
+Không yêu cầu nhãn (labels) exploit/non-exploit thủ công.
+Có thể hoàn thành trong 2–3 ngày sau khi D3/D4 ổn định.
+Dễ giải thích trước hội đồng.
+
+Thay vì cố gắng dự báo giá hoặc xây dựng LSTM/Transformer, Epic D6 sẽ trả lời:
+
+"Can abnormal user withdrawal behaviour be automatically detected around DeFi security incidents?"
+
+1. Proposal Interpretation
+Research Positioning
+
+D6 không phải là mô hình dự báo.
+
+D6 là:
+
+Unsupervised Behavioral Anomaly Detection
+
+
+trên:
+
+Hourly User Flow
+Hourly Liquidity Changes
+
+
+được tạo ra từ D4.
+
+Research Contribution
+
+RQ mới (Optional AI Extension)
+
+RQ5
+
+Can anomaly detection models identify unusual withdrawal
+and liquidity behaviour during DeFi security incidents?
+
+2. Scope
+In Scope
+Euler
+
+Primary case
+
+Kyber
+
+Secondary validation case
+
+Out of Scope
+Curve
+
+Price prediction
+
+Deep Learning
+
+Sentiment models
+
+Transformers
+
+LLMs
+
+3. Inputs
+
+Từ D4:
+
+hourly_panel.parquet
+
+
+Schema:
+
+hour_utc
+
+deposit_volume
+
+withdrawal_volume
+
+user_net_outflow
+
+attacker_flow
+
+liquidity
+
+forum_count
+
+news_count
+
+4. Research Hypothesis
+H1
+
+Exploit periods generate statistically significant anomalies in:
+
+withdrawal behaviour
+
+H2
+
+Unsupervised ML can detect exploit windows without explicit exploit labels.
+
+5. D6 Architecture
+hourly_panel
+
+        ↓
+
+feature engineering
+
+        ↓
+
+baseline detector
+
+        ↓
+
+Isolation Forest
+
+        ↓
+
+anomaly scores
+
+        ↓
+
+evaluation
+
+        ↓
+
+thesis figures
+
+6. Epic Structure
+D6.1 Feature Preparation
+Goal
+
+Create ML-ready features.
+
+Input
+hourly_panel.parquet
+
+Output
+ml_features.parquet
+
+Features
+Core
+deposit_volume
+
+withdrawal_volume
+
+user_net_outflow
+
+attacker_flow
+
+liquidity
+
+Derived
+withdrawal_to_deposit_ratio
+
+delta_liquidity
+
+rolling_6h_outflow
+
+rolling_24h_outflow
+
+rolling_6h_liquidity_change
+
+rolling_24h_liquidity_change
+
+Optional
+forum_count
+
+news_count
+
+Acceptance Criteria
+No NaN
+
+No duplicate hours
+
+Features reproducible
+
+D6.2 Statistical Baseline Detector
+Goal
+
+Create a non-ML comparison baseline.
+
+Method
+Z-score
+
+Formula
+
+z=x−μσz = \frac{x-\mu}{\sigma}
+Variables
+withdrawal_volume
+
+user_net_outflow
+
+Output
+anomaly_baseline.parquet
+
+Acceptance Criteria
+Exploit period contains
+higher anomaly scores
+than normal period
+
+D6.3 Isolation Forest Model
+Goal
+
+Primary anomaly detector.
+
+Why Isolation Forest?
+
+Advantages:
+
+small datasets
+
+unsupervised
+
+interpretable
+
+fast training
+
+works on tabular features
+
+Library
+from sklearn.ensemble import IsolationForest
+
+Training Window
+
+Use only:
+
+Pre-event period
+
+T-14 days → T0
+
+Inference Window
+T0 → T+7 days
+
+Model Configuration
+IsolationForest(
+    n_estimators=200,
+    contamination="auto",
+    random_state=42
+)
+
+Output
+isolation_forest_results.parquet
+
+
+Fields
+
+hour
+
+anomaly_score
+
+is_anomaly
+
+Acceptance Criteria
+Exploit hours receive
+among the highest anomaly scores
+
+D6.4 Model Evaluation
+Goal
+
+Quantify how well anomalies align with exploit periods.
+
+Metrics
+Peak Rank
+
+Position of exploit hour in anomaly ranking.
+
+Example:
+
+Exploit hour
+
+rank = 2 / 504
+
+Time-To-Peak
+Hours between exploit
+and anomaly-score maximum
+
+Anomaly Density
+Pre-event
+
+vs
+
+Post-event
+
+Detection Window
+24h
+
+72h
+
+7d
+
+Acceptance Criteria
+Post-event anomaly density
+greater than pre-event
+
+D6.5 Visualization & Reporting
+Goal
+
+Generate thesis-ready examples.
+
+Plot 1
+Hourly Outflow
+Outflow
+
++
+
+Exploit timestamp
+
+Plot 2
+Isolation Forest Scores
+Anomaly Score
+
++
+
+Exploit timestamp
+
+Plot 3
+Combined Figure
+Outflow
+
+Liquidity
+
+Anomaly Score
+
+Plot 4
+Euler vs Kyber
+Anomaly Score Comparison
+
+Repository Layout
+src/
+
+├── ml/
+│
+├── feature_engineering.py
+│
+├── anomaly_baseline.py
+│
+├── isolation_forest.py
+│
+├── evaluation.py
+│
+└── visualizations.py
+
+D6 Module Specifications
+feature_engineering.py
+Functions
+build_feature_matrix()
+
+compute_rolling_features()
+
+validate_features()
+
+anomaly_baseline.py
+Functions
+compute_z_score()
+
+compute_threshold_alerts()
+
+isolation_forest.py
+Functions
+fit_model()
+
+predict_scores()
+
+save_results()
+
+evaluation.py
+Functions
+rank_exploit_hours()
+
+compute_detection_window()
+
+compute_density_change()
+
+visualizations.py
+Functions
+plot_outflow()
+
+plot_anomalies()
+
+plot_comparison()
+
+Tests
+Unit Tests
+Feature Engineering
+test_no_missing_features()
+
+test_hourly_alignment()
+
+Isolation Forest
+test_model_reproducibility()
+
+test_random_state_stability()
+
+Evaluation
+test_rank_calculation()
+
+test_density_calculation()
+
+Go/No-Go Gates
+Data Readiness Gate
+
+Input:
+
+D4 completed
+
+
+Required:
+
+hourly_panel exists
+
+
+Status:
+
+GO
+
+Feature Readiness Gate
+
+Required:
+
+No missing features
+
+No duplicate hours
+
+
+Status:
+
+GO
+
+Model Gate
+
+Required:
+
+Isolation Forest trains
+
+Produces anomaly scores
+
+
+Status:
+
+GO
+
+Deliverables
+Files
+ml_features.parquet
+
+anomaly_baseline.parquet
+
+isolation_forest_results.parquet
+
+Figures
+outflow_vs_time.png
+
+anomaly_score.png
+
+euler_vs_kyber.png
+
+Report
+reports/d6_ml_evaluation.md
+
+Success Criteria
+
+D6 is considered complete when:
+
+ D4 hourly panel exists.
+ Feature matrix generated.
+ Z-score baseline generated.
+ Isolation Forest trained.
+ Exploit period analyzed.
+ Evaluation metrics generated.
+ Thesis figures generated.
+ Results reproducible using fixed random seed.
+ D6 report completed.
+Effort Estimate
+Task	EffortD6.1 Features	0.5 day
+D6.2 Baseline	0.25 day
+D6.3 Isolation Forest	0.5 day
+D6.4 Evaluation	0.5 day
+D6.5 Figures	0.25 day
+Documentation	0.25 day
+
+Total: ~2 days
+
+Recommendation
+
+Với trạng thái dự án hiện nay, D6 nên là Epic AI duy nhất được bổ sung. Nó:
+
+Tận dụng trực tiếp dữ liệu từ D4.
+Không làm chậm D3/D4/D5.
+Có tính mới về AI/ML.
+Dễ giải thích trong luận văn.
+Có thể hoàn thành trong khoảng 2 ngày thay vì nhiều tuần như các mô hình Deep Learning.

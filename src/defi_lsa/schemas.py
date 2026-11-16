@@ -104,6 +104,7 @@ class TransactionRecord:
     source: str
     source_sha256: str
     normalization_version: str
+    input_data: str = "0x"
 
 
 @dataclass(frozen=True)
@@ -510,6 +511,7 @@ def normalize_transaction_record(
         source=source,
         source_sha256=source_sha256,
         normalization_version=NORMALIZATION_VERSION,
+        input_data=_normalize_hex_data(raw.get("input", "0x")),
     )
 
 

@@ -31,6 +31,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .d3_schemas import D3_SCHEMA_FIELDS, d3_fields, validate_d3_record
+
 # ---------------------------------------------------------------------------
 # PyArrow type mapping per schema
 # ---------------------------------------------------------------------------
@@ -83,6 +85,7 @@ _SUPPORTED_SCHEMAS: frozenset[str] = frozenset(
         "token_transfers",
         "traces",
         "contracts",
+        *D3_SCHEMA_FIELDS.keys(),
     }
 )
 
@@ -184,8 +187,13 @@ def jsonl_to_parquet(
     # ------------------------------------------------------------------ #
     # 2. Build columnar data with correct types                            #
     # ------------------------------------------------------------------ #
-    # Collect all field names from the first record; assume consistent shape.
-    field_names: list[str] = list(records[0].keys())
+    if schema_name in D3_SCHEMA_FIELDS:
+        for record in records:
+            validate_d3_record(schema_name, record)
+        field_names = list(d3_fields(schema_name))
+    else:
+        # Preserve the existing D2 behavior for normalized records.
+        field_names = list(records[0].keys())
 
     columns: dict[str, pa.Array] = {}
     def _encode_uint256(value: Any) -> bytes | None:
