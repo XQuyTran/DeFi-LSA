@@ -102,6 +102,10 @@ class CollectionContext:
         return self._effective_block("end_block", self.requested_end_block)
 
     @property
+    def collection_assets(self) -> tuple[str, ...]:
+        return tuple(sorted(set(str(asset) for asset in self.event.get("collection_assets", []))))
+
+    @property
     def logs_path(self) -> Path:
         return normalized_path("logs", self.event_id, self.output_root)
 
@@ -384,6 +388,7 @@ class CollectionContext:
             "registry_end_block": self.event.get("end_block"),
             "range_override": self.requested_start_block is not None,
             "scope_addresses": list(self.scope.addresses),
+            "collection_assets": list(self.collection_assets),
             "registered_tx_hashes": list(self.registered_tx_hashes),
             "tokens_related": list(self.tokens_related),
             "paths": {

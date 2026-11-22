@@ -68,6 +68,10 @@ def _registry_command(args: argparse.Namespace) -> int:
         + "\n",
         encoding="utf-8",
     )
+    evidence_paths = [
+        args.alert_benchmarks,
+        args.events_master,
+    ]
     write_registry_manifest(
         args.manifest_output,
         [
@@ -77,6 +81,7 @@ def _registry_command(args: argparse.Namespace) -> int:
             *([args.incident_legs] if args.incident_legs.exists() else []),
             args.tokens,
             args.public_sources,
+            *[path for path in evidence_paths if path.exists()],
         ],
     )
     print(f"Validated {len(candidates)} event candidates")
@@ -498,6 +503,16 @@ def build_parser() -> argparse.ArgumentParser:
     registry.add_argument("--tokens", type=Path, default=root / "configs" / "tokens.json")
     registry.add_argument(
         "--public-sources", type=Path, default=root / "configs" / "public_sources.json"
+    )
+    registry.add_argument(
+        "--alert-benchmarks",
+        type=Path,
+        default=root / "configs" / "alert_benchmarks.json",
+    )
+    registry.add_argument(
+        "--events-master",
+        type=Path,
+        default=root / "data" / "evidence" / "events_master_verified.csv",
     )
     registry.set_defaults(handler=_registry_command)
 

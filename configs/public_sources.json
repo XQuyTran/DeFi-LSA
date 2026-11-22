@@ -7,7 +7,7 @@
     "gdelt_aliases":["Euler Finance"],
     "keywords":["Euler","exploit","recovery"],
     "allowed_domains":["euler.finance","forum.euler.finance","zellic.io"],
-    "collection_window":{"start_utc":"2023-03-13T08:56:35Z","end_utc":"2023-03-13T08:56:35Z"}
+    "collection_window":{"start_utc":"2023-03-06T08:56:35Z","end_utc":"2023-03-16T08:56:35Z"}
   },
   {
     "event_id":"curve_vyper_2023-07-30",

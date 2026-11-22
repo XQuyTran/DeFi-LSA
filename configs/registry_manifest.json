@@ -1,12 +1,14 @@
 {
-  "git_commit": "97a3e1470e626141645037bf59f5a8d17787c6e3",
+  "git_commit": "fcd79730f1710ca8a8fccf8a3bf637cc275b464e",
   "inputs": {
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\alert_benchmarks.json": "53e2793591bfddd1642539fef95b83e9fb7e8611c489014df976ed14c7d276a1",
     "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\contract_scopes.json": "0121a591cb2763a56cf0ce195dcd4c10389ab9e25c51ed711b155ee8f7b907b6",
-    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\events.json": "a30c7d04f84ccce9403d2167f6c4e05e200996725f7da7ea8792a5010d57c317",
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\events.json": "e36ec739746e834a1d047f23363144a3d4f18a19fa41bf69b5ae0e6a4763d620",
     "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\incident_legs.json": "318163db2b948dad8544a2bcd4fa268129e00c0768d78044ee6090b8ca1d6598",
-    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\public_sources.json": "9b4d2c673843f55152df5548ef1c3b2ee0f93ce3246dfb3a83855196d35e4924",
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\public_sources.json": "0f1bcdd7a69428fa03542f2d96f9c9839ae1268751d0293b3f1e87c6b3821a08",
     "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\configs\\tokens.json": "2655ea63c8f76ff3c58f2ea38cb49d195b693b518e9baf3a832cbcb8d1f54255",
-    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\data\\raw\\event_candidates.csv": "7658859841c5b12a437fa7b98d1c14f7d9f42f3dc37e6adb1052d6483c6018e5"
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\data\\evidence\\events_master_verified.csv": "7b3ad8c2e67b868626244afca9e7121f7eb7ffbd289cbae2e7ef01683f77433b",
+    "D:\\Quy Tran\\Documents\\masters\\Blockchain\\project\\DeFi-LSA\\data\\raw\\event_candidates.csv": "cca3da9f194ab5a46bc46dec7db21b38ba39413ddbc5953fde4fafd0e0841955"
   },
   "registry_version": "1.0"
 }

@@ -11,9 +11,9 @@
     ],
     "block_number": 16818024,
     "chain_id": 1,
-    "collection_end_utc": "2023-03-13T08:56:35Z",
-    "collection_start_utc": "2023-03-13T08:56:35Z",
-    "end_block": 16818024,
+    "collection_end_utc": "2023-03-16T08:56:35Z",
+    "collection_start_utc": "2023-03-06T08:56:35Z",
+    "end_block": 16845224,
     "event_date_utc": "2023-03-13",
     "event_id": "euler_2023-03-13",
     "exploit_tx_hash": "0x47ac3527d02e6b9631c77fad1cdee7bfa77a8a7bfd4880dccbda5146ace4088f",
@@ -22,8 +22,8 @@
     "protocol_or_vulnerable_contracts": [
       "0x27182842e098f60e3d576794a5bffb0777e025d3"
     ],
-    "required_next_action": "Enumerate all Euler exploit tx hashes from attacker cluster and reconcile each asset leg before dataset freeze",
-    "start_block": 16818024,
+    "required_next_action": "Collect the 10-day Euler window, enumerate all exploit and recovery transactions, and reconcile each affected asset leg before dataset freeze",
+    "start_block": 16773224,
     "tokens_related": [
       "WETH",
       "DAI",

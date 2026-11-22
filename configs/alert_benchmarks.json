@@ -1,0 +1,32 @@
+[
+  {
+    "event_id": "euler_2023-03-13",
+    "alert_id": "alert-euler-01",
+    "source_entity": "PeckShieldAlert",
+    "platform": "Twitter/X",
+    "timestamp_utc": "2023-03-13T09:36:00Z",
+    "url": "https://twitter.com/PeckShieldAlert/status/1635212519998185472",
+    "alert_category": "confirmed_exploit",
+    "reported_loss_text": "$197M"
+  },
+  {
+    "event_id": "euler_2023-03-13",
+    "alert_id": "alert-euler-02",
+    "source_entity": "BlockSec",
+    "platform": "Twitter/X",
+    "timestamp_utc": "2023-03-13T09:48:00Z",
+    "url": "https://twitter.com/BlockSecTeam/status/1635215538261303296",
+    "alert_category": "confirmed_exploit",
+    "reported_loss_text": "$197M"
+  },
+  {
+    "event_id": "euler_2023-03-13",
+    "alert_id": "alert-euler-03",
+    "source_entity": "Euler Finance",
+    "platform": "Twitter/X",
+    "timestamp_utc": "2023-03-13T11:05:00Z",
+    "url": "https://twitter.com/eulerfinance/status/1635234914104475648",
+    "alert_category": "protocol_acknowledgement",
+    "reported_loss_text": "unspecified"
+  }
+]

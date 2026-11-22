@@ -1,0 +1,2 @@
+event_id,protocol,chain_id,exploit_tx_hash,exploit_block,exploit_timestamp_utc,collection_start_utc,collection_end_utc,start_block,end_block,reported_loss_reference,reported_loss_source,primary_evidence_url
+"euler_2023-03-13","Euler Finance",1,"0x47ac3527d02e6b9631c77fad1cdee7bfa77a8a7bfd4880dccbda5146ace4088f",16818024,"2023-03-13T08:56:35Z","2023-03-06T08:56:35Z","2023-03-16T08:56:35Z",16773224,16845224,"Institutional postmortem and incident reporting","Euler Finance; Zellic","https://www.euler.finance/blog/war-peace-behind-the-scenes-of-eulers-240m-exploit-recovery"
