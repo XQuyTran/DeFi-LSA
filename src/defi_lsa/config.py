@@ -209,24 +209,56 @@ def load_source_config(path: Path | None = None) -> SourceConfig:
     )
     flattened["gdelt_enabled"] = gdelt.get("enabled", values.get("gdelt_enabled", True))
     flattened["output_root"] = collection.get("output_root", values.get("output_root", ""))
+    aws_public_blockchain = values.get("aws_public_blockchain", {})
+    if not isinstance(aws_public_blockchain, Mapping) or not aws_public_blockchain:
+        aws_public_blockchain = {
+            "enabled": True,
+            "region": "us-east-2",
+            "bucket": "aws-public-blockchain",
+            "ethereum_root": "s3://aws-public-blockchain/v1.0/eth/",
+            "anonymous": True,
+            "tables": {
+                "blocks": "blocks/date={YYYY-MM-DD}/",
+                "transactions": "transactions/date={YYYY-MM-DD}/",
+                "logs": "logs/date={YYYY-MM-DD}/",
+                "token_transfers": "token_transfers/date={YYYY-MM-DD}/",
+                "traces": "traces/date={YYYY-MM-DD}/",
+                "contracts": "contracts/date={YYYY-MM-DD}/",
+            },
+        }
+
+    source_priority = values.get("source_priority", {})
+    if not isinstance(source_priority, Mapping) or not source_priority:
+        source_priority = {
+            "blocks": ("aws_public_blockchain", "ethereum_rpc"),
+            "transactions": ("aws_public_blockchain", "ethereum_rpc"),
+            "logs": ("aws_public_blockchain", "ethereum_rpc"),
+            "token_transfers": ("aws_public_blockchain",),
+            "traces": ("aws_public_blockchain",),
+            "contracts": ("aws_public_blockchain",),
+            "receipts": ("ethereum_rpc", "etherscan"),
+            "abi": ("etherscan", "local_cache", "protocol_repository"),
+            "prices": ("chainlink", "onchain_pool", "coingecko"),
+            "public_information": ("official_protocol", "discourse", "gdelt"),
+        }
+
     flattened.update(
         {
             "forums": values.get("forums", {}),
-            "aws_public_blockchain": values.get("aws_public_blockchain", {}),
+            "aws_public_blockchain": aws_public_blockchain,
             "enabled_sources": {
                 "ethereum_rpc": bool(ethereum.get("enabled", True)),
                 "etherscan": bool(etherscan.get("enabled", True)),
                 "coingecko": bool(coingecko.get("enabled", True)),
                 "gdelt": bool(gdelt.get("enabled", True)),
-                "aws_public_blockchain": bool(
-                    values.get("aws_public_blockchain", {}).get("enabled", True)
-                ),
+                "aws_public_blockchain": bool(aws_public_blockchain.get("enabled", True)),
                 "forums": bool(values.get("forums", {}).get("enabled", True)),
             },
             "source_priority": {},
         }
     )
-    for key, value in values.get("source_priority", {}).items():
+    source_priority_values = source_priority if isinstance(source_priority, Mapping) else {}
+    for key, value in source_priority_values.items():
         if not isinstance(value, (list, tuple)):
             raise ValueError(f"source priority for {key} must be an array")
         flattened["source_priority"][key] = tuple(value)
