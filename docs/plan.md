@@ -1,432 +1,210 @@
-Updated Plan for the Final 2 Weeks
-Mode: Implementation-ready
+# G05.C3 – Final 7-Day Execution Plan (Revised Epic Structure)
 
-Decision: Freeze D2 feature development. Focus on producing a defensible research dataset and thesis results.
+## Project Title
 
-Current status indicates that:
+Flow Analysis and Incident Alerting Around DeFi Security Events
 
-D1 Registry is complete.
-E2–E5 core collection infrastructure is effectively complete.
-E6 artifact-derived audit exists and produces D2 audit reports.
-Euler and Kyber smoke collections have successfully generated logs, transactions, receipts, checkpoints, ABI coverage reports, and D2 audit outputs.
-Curve remains non-executable because incident-leg verification is incomplete.
+## Execution Mode
 
-Given the remaining schedule, the primary goal is no longer platform hardening; it is delivery of a research-quality dataset and thesis evidence package.
+Implementation-Ready
 
-1. Project Objective (Revised)
+## Main Objective
 
-Build a reproducible dataset and analysis pipeline capable of answering:
+Deliver a defendable MSc project by producing:
 
-RQ1: How do DeFi security incidents affect user withdrawals and liquidity?
-RQ2: How much observed liquidity loss is attributable to attacker drains versus user reaction?
-RQ3: How does public information relate temporally to user capital flight?
+1. A verified and reproducible DeFi incident dataset.
+2. A flow-leg based capital flow reconstruction methodology.
+3. A frozen hourly research dataset.
+4. A no-look-ahead incident alert replay framework.
+5. Thesis-ready evidence, figures, report, and defense slides.
 
-The project will prioritize:
+---
 
-Euler Finance as the primary case.
-KyberSwap Elastic (Ethereum-only scope) as the secondary case.
-Curve Finance Vyper Incident becomes an optional extension if registry completion is achieved on time.
-2. Scope Freeze
-Included
-Event 1
+# Scope Decision
 
-Euler Finance
+## Included
 
-Collection window:
-T-14 days → T+7 days
+### Primary Case (Mandatory)
 
+- Euler Finance
+- Ethereum
+- T-7 days → T+3 days
 
-Primary dataset.
+### Secondary Case (Conditional Validation)
 
-Event 2
+- KyberSwap Elastic
+- Ethereum only
+- Activated only if Data Readiness Gate passes before Day 2 completion.
 
-KyberSwap Elastic
+---
 
-Ethereum only
+## Excluded
 
+### Case Studies
 
-Secondary dataset.
+- Curve Finance
+- EVT_002
+- EVT_004
+- EVT_008
 
-Deferred
-Event 3
+### Methods
 
-Curve Finance Vyper Incident
+- BSTS
+- VAR
+- Granger Causality
+- Isolation Forest
+- Machine Learning Extensions
+- Deep Learning Models
+- Sentiment Models
 
-Remain:
+---
 
-Conditional GO
+# Research Questions
 
+## RQ1
 
-until all incident legs are verified.
+How does flow-leg classification change the estimation of liquidity loss around DeFi security incidents?
 
-3. Revised Phase Structure
-Phase A
-Complete D2 Operational Closure
+### Evidence
 
-Phase B
-D3 Event Decoding & Classification
+- Naive flow estimation
+- Classified flow estimation
+- Misclassification ratio
 
-Phase C
-D4 Flow & Liquidity Reconstruction
+---
 
-Phase D
-D5 Dataset Freeze
+## RQ2
 
-Phase E
-Research Analysis & Thesis
+How does user capital outflow differ between baseline periods and the first 24h after a security incident?
 
-Phase A — D2 Operational Closure
-Goal
+### Evidence
 
-Produce at least one complete event dataset.
+- User Net Outflow
+- Mann-Whitney U Test
+- Cliff's Delta
+- Median and IQR comparison
 
-Remaining Tasks
-A1
+---
 
-Euler Full Collection
+## RQ3
 
-Owner:
+When would a no-look-ahead incident detection rule trigger relative to:
 
-Data Engineer
+- exploit occurrence
+- verified public alerts
 
+### Evidence
 
-Actions:
+- Detection delay
+- Alert lag
+- False alert rate
+- Sensitivity analysis
 
+---
+
+# Epic Overview
+
+| Epic | Name | Priority |
+|--------|--------|--------|
+| E0 | Scope Freeze & Evidence Registry | P0 |
+| E1 | Euler Data Readiness | P0 |
+| E2 | Flow-Leg Decoding & Classification | P0 |
+| E3 | Hourly Dataset Freeze | P0 |
+| E4 | Descriptive & Statistical Analysis | P0 |
+| E5 | No-Look-Ahead Alert Replay | P0 |
+| E6 | Kyber Conditional Validation | P1 |
+| E7 | Final Submission Package | P0 |
+
+---
+
+# EPIC E0
+# Scope Freeze & Evidence Registry
+
+## Goal
+
+Freeze research scope, incident anchors, and alert benchmarks.
+
+## Owner
+
+TV1
+
+## Tasks
+
+### E0.1 Verify Exploit Anchors
+
+For each case:
+
+- exploit_tx_hash
+- exploit_block
+- exploit_timestamp_utc
+- evidence_url
+
+### E0.2 Verify Alert Benchmarks
+
+Collect:
+
+- source account
+- platform
+- timestamp
+- URL
+- alert category
+
+Categories:
+
+- initial_suspicion
+- confirmed_exploit
+- protocol_acknowledgement
+- postmortem
+
+### E0.3 Event Exclusion Log
+
+Document:
+
+- EVT_002
+- EVT_004
+- EVT_008
+- Curve
+
+and why they are excluded.
+
+## Outputs
+
+events_master_verified.csv
+
+event_exclusion_log.md
+
+research_scope_v1.md
+
+## Acceptance Criteria
+
+- Euler anchor verified
+- UTC timestamps verified
+- Alert benchmark documented
+- Scope frozen
+
+---
+
+# EPIC E1
+# Euler Data Readiness
+
+## Goal
+
+Create a usable raw dataset for Euler.
+
+## Owner
+
+TV2
+
+## Tasks
+
+### E1.1 Full Collection
+
+Run:
+
+```bash
 python -m defi_lsa collect \
-  --event euler \
-  --stage all \
-  --source auto \
-  --resume
-
-
-Output:
-
-raw logs
-transactions
-receipts
-ABI
-audit
-
-
-Acceptance:
-
-D2 audit = GO
-or approved CONDITIONAL_GO
-
-A2
-
-Artifact Validation
-
-Verify:
-
-receipts exist
-
-transactions exist
-
-logs exist
-
-ABI coverage report exists
-
-source manifests exist
-
-
-Acceptance:
-
-No hidden failed ranges
-
-A3
-
-Resume Verification
-
-Run collection twice.
-
-Acceptance:
-
-Second run does not recollect
-completed ranges
-
-A4
-
-Kyber Full Collection
-
-Same acceptance as Euler.
-
-Ethereum-only scope.
-
-Phase B — D3 Event Decoding & Classification
-Goal
-
-Transform raw blockchain records into research events.
-
-D3.1 Decode Events
-
-Implement:
-
-decode_event_logs()
-decode_function_input()
-
-
-Output:
-
-decoded_events.parquet
-
-
-Acceptance:
-
-100% exploit transactions decoded
-
-D3.2 Transaction Classification
-
-Labels:
-
-deposit
-withdrawal
-swap
-flash_loan
-exploit
-recovery
-unknown
-
-
-Output:
-
-classified_transactions.parquet
-
-
-Acceptance:
-
-Unknown flow ≤ 5%
-
-D3.3 Actor Classification
-
-Roles:
-
-attacker
-whitehat
-protocol
-user
-unknown
-
-
-Acceptance:
-
-All exploit paths classified
-
-Phase C — D4 Flow & Liquidity Reconstruction
-Goal
-
-Create research variables.
-
-D4.1 UserNetOutflow
-
-Formula:
-
-Withdrawals - Deposits
-excluding attacker actors
-
-
-Output:
-
-user_net_outflow_hourly.parquet
-
-D4.2 Attacker Flow
-
-Output:
-
-attacker_flow_hourly.parquet
-
-D4.3 Liquidity Series
-
-Because CoinGecko remains disabled in runtime configuration and audit currently accepts this as a documented conditional status, liquidity should initially be expressed in token units rather than USD-adjusted liquidity.
-
-Required:
-
-WETH balances
-USDC balances
-WBTC balances
-...
-
-
-Optional:
-
-Chainlink prices
-DEX-derived prices
-
-
-if time permits.
-
-D4.4 Hourly Panel
-
-Output:
-
-hourly_panel.parquet
-
-
-Columns:
-
-hour_utc
-user_net_outflow
-attacker_flow
-token_balance
-forum_count
-news_count
-
-Phase D — D5 Dataset Freeze
-Goal
-
-Produce defendable research datasets.
-
-D5.1 Quality Audit
-
-Checks:
-
-duplicate logs = 0
-
-missing exploit receipts = 0
-
-unknown_flow ≤ 5%
-
-D5.2 Dataset Freeze
-
-Outputs:
-
-dataset_euler_v1.parquet
-
-dataset_kyber_v1.parquet
-
-
-Plus:
-
-dataset_manifest.json
-
-data_dictionary.md
-
-D5.3 Data Readiness Gate
-
-Required:
-
-GO
-or approved CONDITIONAL_GO
-
-
-for frozen datasets.
-
-Phase E — Research Analysis
-Goal
-
-Produce thesis-ready evidence.
-
-E1
-
-Descriptive Event Analysis
-
-For:
-
-24h
-72h
-7d
-
-
-Compute:
-
-deposit volume
-
-withdrawal volume
-
-cumulative net outflow
-
-attacker drain
-
-recovery flow
-
-E2
-
-Baseline Comparison
-
-Minimum:
-
-Before vs After
-
-
-Optional:
-
-OLS Event Dummy
-
-
-if time allows.
-
-E3
-
-Thesis Figures
-
-Produce:
-
-Hourly User Outflow
-Cumulative Outflow
-Attacker vs User Flow
-Liquidity Trend
-Event Timeline
-
-All charts must be generated from frozen datasets.
-
-Two-Week Schedule
-Days	Objective	Exit Condition1–2	Euler full D2	Audit GO
-3–4	D3 Euler	Unknown ≤5%
-5	D4 Euler	Hourly panel complete
-6	D5 Euler	Dataset frozen
-7–8	Kyber D2	Audit GO/Conditional GO
-9–10	D3 Kyber	Classification complete
-11	Baseline analysis	Tables generated
-12	Figures	Thesis charts complete
-13	Writing	Results section complete
-14	Rebuild + package	All artifacts reproducible
-De-scoped Items
-
-The following are no longer on the critical path:
-
-Additional D2 hardening
-
-More AWS enhancements
-
-CoinGecko integration
-
-Generic multi-source pricing
-
-Curve full implementation
-
-BSTS
-
-VAR
-
-Advanced counterfactual models
-
-Extended robustness suite
-
-Definition of Done
-
-The project is considered complete when:
-
- Euler dataset frozen
- Kyber dataset frozen or documented Conditional GO
- D3 classification complete
- D4 hourly panel complete
- D5 quality audit passed
- Figures generated automatically
- Results reproducible from frozen artifacts
- Thesis package prepared
-Final Recommendation
-
-For the remaining two weeks:
-
-Stop expanding D2.
-
-Finish Euler.
-
-Finish Kyber.
-
-Complete D3 → D4 → D5.
-
-Write the thesis.
-
-
-This provides the highest probability of delivering a defendable MSc project within the remaining schedule while leveraging the D2 infrastructure that has already been built and validated through smoke collection.
+ --event euler \
+ --stage all \
+ --source auto \
+ --resume
+```

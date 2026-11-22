@@ -179,6 +179,43 @@ class CollectionContext:
         return self.output_root / "reports" / self.event_id
 
     @property
+    def decoded_dir(self) -> Path:
+        """Canonical directory for D3 Parquet outputs."""
+        return self.output_root / "data" / "decoded"
+
+    @property
+    def decoded_events_path(self) -> Path:
+        return self.decoded_dir / "decoded_events.parquet"
+
+    @property
+    def decoded_calls_path(self) -> Path:
+        return self.decoded_dir / "decoded_calls.parquet"
+
+    @property
+    def classified_transactions_path(self) -> Path:
+        return self.decoded_dir / "classified_transactions.parquet"
+
+    @property
+    def actor_roles_path(self) -> Path:
+        return self.decoded_dir / "actor_roles.parquet"
+
+    @property
+    def incident_legs_resolved_path(self) -> Path:
+        return self.decoded_dir / "incident_legs_resolved.parquet"
+
+    @property
+    def balance_inputs_path(self) -> Path:
+        return self.decoded_dir / "balance_inputs.parquet"
+
+    @property
+    def unknown_event_report_path(self) -> Path:
+        return self.reports_dir / "unknown_event_report.json"
+
+    @property
+    def d3_gate_report_path(self) -> Path:
+        return self.reports_dir / "d3_gate_report.json"
+
+    @property
     def aws_adapter(self) -> AwsPublicBlockchainAdapter:
         settings = self.source_config.aws_public_blockchain
         return AwsPublicBlockchainAdapter(

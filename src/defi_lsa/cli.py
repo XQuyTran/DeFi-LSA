@@ -40,6 +40,7 @@ from .registry import (
     validate_executable_candidates,
     write_registry_manifest,
 )
+from .d3_pipeline import run_d3
 
 
 def _default_root() -> Path:
@@ -93,6 +94,21 @@ def _build_command(args: argparse.Namespace) -> int:
         f"for {selected[0].event_id}."
     )
     return 0
+
+
+def _d3_command(args: argparse.Namespace) -> int:
+    try:
+        report = run_d3(
+            args.event,
+            output_root=args.output,
+            events_path=args.events,
+            incident_legs_path=args.incident_legs,
+        )
+        print(json.dumps(report, sort_keys=True))
+        return 0
+    except Exception as exc:
+        print(json.dumps({"status": "failed", "error": redact_credentials(str(exc))}, sort_keys=True))
+        return 1
 
 
 def _source_manifest_command(args: argparse.Namespace) -> int:
@@ -573,6 +589,17 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--start-block", type=int)
     audit.add_argument("--end-block", type=int)
     audit.set_defaults(handler=_audit_command)
+
+    d3 = subparsers.add_parser("d3", help="decode and classify D2 artifacts")
+    d3.add_argument("--event", required=True)
+    d3.add_argument("--output", type=Path, default=root)
+    d3.add_argument("--events", type=Path, default=root / "configs" / "events.json")
+    d3.add_argument(
+        "--incident-legs",
+        type=Path,
+        default=root / "configs" / "incident_legs.json",
+    )
+    d3.set_defaults(handler=_d3_command)
     return parser
 
 
