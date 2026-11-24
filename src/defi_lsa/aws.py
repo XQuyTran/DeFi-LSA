@@ -302,12 +302,6 @@ def _build_filter_expression(dataset_module: Any, contract: AwsTableContract, fi
     if transaction_hashes and contract.transaction_column in contract.required_columns:
         condition = dataset_module.field(contract.transaction_column).isin(transaction_hashes)
         expression = condition if expression is None else expression & condition
-    addresses = [str(value).lower() for value in filters.get("addresses", ())]
-    if addresses:
-        address_expression = None
-        for condition in (dataset_module.field(column).isin(addresses) for column in contract.address_columns):
-            address_expression = condition if address_expression is None else address_expression | condition
-        expression = address_expression if expression is None else expression & address_expression
     return expression
 
 
