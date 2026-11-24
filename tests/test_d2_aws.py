@@ -2,6 +2,7 @@ from defi_lsa.aws import (
     AWS_TABLE_CONTRACTS,
     AwsPublicBlockchainAdapter,
     AwsSchemaError,
+    estimate_block_date,
     filter_aws_records_by_scope,
     normalize_aws_block_record,
     normalize_aws_contract_record,
@@ -22,6 +23,18 @@ def test_aws_partition_dates_are_expanded_deterministically():
         {"date": "2023-03-14"},
         {"date": "2023-03-15"},
     ]
+
+
+def test_estimate_block_date_and_partition_inference():
+    # Genesis and post-merge known dates
+    assert estimate_block_date(0).isoformat() == "2015-07-30"
+    assert estimate_block_date(15537393).isoformat() == "2022-09-15"
+    assert estimate_block_date(16818024).isoformat() == "2023-03-13"
+
+    adapter = AwsPublicBlockchainAdapter()
+    # When start_date and end_date are None, partition_paths infers from blocks in _fetch
+    paths = adapter._partition_paths("logs", "2023-03-13", "2023-03-13")
+    assert paths == ["s3://aws-public-blockchain/v1.0/eth/logs/date=2023-03-13"]
 
 
 def test_aws_query_seam_preserves_filters_and_table_contracts():

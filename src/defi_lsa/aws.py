@@ -69,6 +69,18 @@ AWS_TABLE_CONTRACTS: dict[str, AwsTableContract] = {
 }
 
 
+def estimate_block_date(block_number: int) -> date:
+    """Estimate the UTC calendar date for an Ethereum mainnet block number."""
+    if block_number >= 15537393:
+        # Post-merge (block 15537393 on 2022-09-15 06:42:42 UTC, timestamp 1663224162)
+        # Average slot time is 12.06s in practice due to occasional missed slots
+        ts = 1663224162 + int((block_number - 15537393) * 12.06)
+    else:
+        # Pre-merge average block time was ~13.3 seconds
+        ts = 1438269988 + int((block_number / 15537393) * (1663224162 - 1438269988))
+    return datetime.fromtimestamp(ts, tz=timezone.utc).date()
+
+
 class AwsPublicBlockchainAdapter:
     """Read AWS Ethereum Parquet data with an injectable offline query seam."""
 
@@ -139,7 +151,17 @@ class AwsPublicBlockchainAdapter:
         if self.filesystem is None:
             self.filesystem = _anonymous_filesystem(self.region)
         contract = AWS_TABLE_CONTRACTS[table]
-        paths = self._partition_paths(table, filters.get("start_date"), filters.get("end_date"))
+        start_date = filters.get("start_date")
+        end_date = filters.get("end_date")
+        if start_date is None and end_date is None:
+            start_block = filters.get("start_block")
+            end_block = filters.get("end_block")
+            if start_block is not None or end_block is not None:
+                sb = start_block if start_block is not None else end_block
+                eb = end_block if end_block is not None else start_block
+                start_date = (estimate_block_date(sb) - timedelta(days=1)).isoformat()
+                end_date = (estimate_block_date(eb) + timedelta(days=1)).isoformat()
+        paths = self._partition_paths(table, start_date, end_date)
         if not paths:
             return []
         try:
@@ -151,7 +173,10 @@ class AwsPublicBlockchainAdapter:
         for path in paths:
             filesystem_path = path.removeprefix("s3://") if path.startswith("s3://") else path
             if path.startswith("s3://") and hasattr(self.filesystem, "glob"):
-                dataset_paths.extend(self.filesystem.glob(f"{filesystem_path}/*.parquet"))
+                matched = self.filesystem.glob(f"{filesystem_path}/*.parquet")
+                if not matched and "/date=" not in path:
+                    matched = self.filesystem.glob(f"{filesystem_path}/date=*/*.parquet")
+                dataset_paths.extend(matched)
             else:
                 dataset_paths.append(filesystem_path)
         if not dataset_paths:

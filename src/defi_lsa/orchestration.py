@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterable
 from .checkpoints import Checkpoint, CheckpointStore, compute_scope_hash
 from .aws import (
     AwsPublicBlockchainAdapter,
+    estimate_block_date,
     normalize_aws_block_record,
     normalize_aws_contract_record,
     normalize_aws_log_record,
@@ -100,6 +101,24 @@ class CollectionContext:
     @property
     def end_block(self) -> int:
         return self._effective_block("end_block", self.requested_end_block)
+
+    @property
+    def start_date(self) -> str:
+        date_str = str(
+            self.event.get("collection_start_utc") or self.event.get("event_date_utc") or ""
+        )[:10]
+        if date_str:
+            return date_str
+        return estimate_block_date(self.start_block).isoformat()
+
+    @property
+    def end_date(self) -> str:
+        date_str = str(
+            self.event.get("collection_end_utc") or self.event.get("event_date_utc") or ""
+        )[:10]
+        if date_str:
+            return date_str
+        return estimate_block_date(self.end_block).isoformat()
 
     @property
     def collection_assets(self) -> tuple[str, ...]:
@@ -549,17 +568,11 @@ class CollectionContext:
         }
         if table not in paths:
             raise ValueError(f"unsupported extended AWS collection table {table!r}")
-        start_date = str(
-            self.event.get("collection_start_utc") or self.event.get("event_date_utc")
-        )[:10]
-        end_date = str(
-            self.event.get("collection_end_utc") or self.event.get("event_date_utc")
-        )[:10]
         self._handle_force(table, [paths[table]])
         rows = self.aws_adapter.fetch_table(
             table,
-            start_date=start_date,
-            end_date=end_date,
+            start_date=self.start_date,
+            end_date=self.end_date,
             start_block=self.start_block,
             end_block=self.end_block,
             addresses=self.scope.addresses,
@@ -589,6 +602,8 @@ class CollectionContext:
             self._handle_force("logs", [self.logs_path])
             rows = self.aws_adapter.fetch_table(
                 "logs",
+                start_date=self.start_date,
+                end_date=self.end_date,
                 start_block=self.start_block,
                 end_block=self.end_block,
                 addresses=self.scope.addresses,
@@ -664,6 +679,8 @@ class CollectionContext:
             hashes = [item[0] for item in discovered]
             rows = self.aws_adapter.fetch_table(
                 "transactions",
+                start_date=self.start_date,
+                end_date=self.end_date,
                 start_block=self.start_block,
                 end_block=self.end_block,
                 transaction_hashes=hashes,
