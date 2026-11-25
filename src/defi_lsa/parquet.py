@@ -59,10 +59,30 @@ _INT64_FIELDS: frozenset[str] = frozenset(
         "log_index",
         # PriceRecord
         "source_timestamp",
+        "token_decimals",
+        "missing_blocks",
+        "missing_receipts",
     }
 )
 
-_FLOAT64_FIELDS: frozenset[str] = frozenset({"usd_price"})
+_FLOAT64_FIELDS: frozenset[str] = frozenset(
+    {
+        "usd_price",
+        "usd_price_anchor",
+        "attacker_drain_token",
+        "recovery_flow_token",
+        "user_net_flow_token",
+        "swap_mev_token",
+        "internal_transfer_token",
+        "unknown_token",
+        "attacker_drain_usd",
+        "recovery_flow_usd",
+        "user_net_flow_usd",
+        "swap_mev_usd",
+        "internal_transfer_usd",
+        "unknown_usd",
+    }
+)
 _UINT256_BINARY_FIELDS: frozenset[str] = frozenset({"value_wei"})
 
 # Fields that are stored as JSON arrays (topics, inclusion_reasons) — they

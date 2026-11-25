@@ -154,5 +154,6 @@ def test_d3_publishes_canonical_artifacts_from_synthetic_d2_records(tmp_path: Pa
     assert report["status"] == "GO"
     assert (tmp_path / "data" / "decoded" / "decoded_events.parquet").exists()
     assert (tmp_path / "data" / "decoded" / "decoded_calls.parquet").exists()
+    assert (tmp_path / "data" / "decoded" / "flow_legs.parquet").exists()
     assert (report_dir / "unknown_event_report.json").exists()
     assert (report_dir / "d3_gate_report.json").exists()

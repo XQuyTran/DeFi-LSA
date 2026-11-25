@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
+
+from .d3_schemas import D3_SCHEMA_VERSION, FLOW_LEG_LABELS
 
 
 CLASSIFICATION_PRIORITY = (
@@ -30,6 +33,20 @@ ROLE_MAP = {
     "recovery": "protocol",
     "front_runner": "user",
     "mev": "user",
+}
+
+_FLOW_ROLE_ALIASES = {
+    "attacker": "attacker",
+    "primary_exploiter": "attacker",
+    "white_hat": "whitehat",
+    "white-hat": "whitehat",
+    "whitehat": "whitehat",
+    "protocol": "protocol",
+    "protocol_treasury": "protocol",
+    "user": "user",
+    "victim": "user",
+    "front_runner": "mev",
+    "mev": "mev",
 }
 
 
@@ -184,3 +201,169 @@ def build_balance_inputs(
             }
         )
     return rows
+
+
+def classify_flow_leg(
+    transfer: Mapping[str, Any],
+    *,
+    decoded_events: Sequence[Mapping[str, Any]] = (),
+    decoded_calls: Sequence[Mapping[str, Any]] = (),
+    exploit_hashes: Iterable[str] = (),
+    recovery_hashes: Iterable[str] = (),
+    core_addresses: Iterable[str] = (),
+    role_by_address: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Classify one token transfer using explicit registry and ABI evidence."""
+    tx_hash = str(transfer.get("tx_hash", "")).lower()
+    from_address = str(transfer.get("from_address", "")).lower()
+    to_address = str(transfer.get("to_address", "")).lower()
+    core = {str(address).lower() for address in core_addresses}
+    roles = {
+        str(address).lower(): _FLOW_ROLE_ALIASES.get(
+            str(role).strip().lower().replace(" ", "_"), "unknown"
+        )
+        for address, role in (role_by_address or {}).items()
+    }
+    exploit_set = {str(value).lower() for value in exploit_hashes}
+    recovery_set = {str(value).lower() for value in recovery_hashes}
+    event_names = {str(item.get("event_name", "")).strip().lower() for item in decoded_events}
+    function_names = {str(item.get("function_name", "")).strip().lower() for item in decoded_calls}
+    endpoint_roles = {roles.get(from_address, "unknown"), roles.get(to_address, "unknown")}
+
+    matched: list[str] = []
+    if from_address in core and roles.get(to_address) == "attacker":
+        matched.append("core_to_attacker")
+    if tx_hash in exploit_set and roles.get(to_address) == "attacker":
+        matched.append("registered_exploit_to_attacker")
+    if tx_hash in recovery_set:
+        matched.append("registered_recovery_transaction")
+    if from_address in core and to_address in core:
+        matched.append("core_to_core_transfer")
+    if event_names & {"flashloan", "flash_loan"} or function_names & {
+        "flashloan",
+        "flash_loan",
+    }:
+        matched.append("flash_loan_activity")
+    if event_names & {"swap", "swapped"} or "swap" in function_names:
+        matched.append("swap_activity")
+    if "mev" in endpoint_roles:
+        matched.append("mev_actor_endpoint")
+    if (
+        event_names & {"deposit", "supply", "withdraw", "withdrawal", "redeem"}
+        or function_names & {"deposit", "supply", "withdraw", "redeem"}
+    ) and "user" in endpoint_roles and bool({from_address, to_address} & core):
+        matched.append("user_liquidity_activity")
+
+    if "core_to_attacker" in matched or "registered_exploit_to_attacker" in matched:
+        label = "attacker_drain"
+    elif "registered_recovery_transaction" in matched:
+        label = "recovery_flow"
+    elif "core_to_core_transfer" in matched:
+        label = "internal_transfer"
+    elif "swap_activity" in matched or "mev_actor_endpoint" in matched:
+        label = "swap_mev"
+    elif "user_liquidity_activity" in matched:
+        label = "user_net_flow"
+    else:
+        label = "unknown"
+
+    return {
+        "flow_label": label,
+        "matched_rules": matched,
+        "evidence": {
+            "event_names": sorted(event_names),
+            "function_names": sorted(function_names),
+            "from_role": roles.get(from_address, "unknown"),
+            "to_role": roles.get(to_address, "unknown"),
+            "registered_exploit": tx_hash in exploit_set,
+            "registered_recovery": tx_hash in recovery_set,
+        },
+    }
+
+
+def build_flow_legs(
+    transfers: Sequence[Mapping[str, Any]],
+    *,
+    decoded_events_by_tx: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    decoded_calls_by_tx: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    exploit_hashes: Iterable[str] = (),
+    recovery_hashes: Iterable[str] = (),
+    core_addresses: Iterable[str] = (),
+    role_by_address: Mapping[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return deterministic, schema-versioned flow-leg rows for transfers."""
+    event_map = decoded_events_by_tx or {}
+    call_map = decoded_calls_by_tx or {}
+    rows: list[dict[str, Any]] = []
+    for transfer in transfers:
+        tx_hash = str(transfer.get("tx_hash", ""))
+        tx_key = tx_hash.lower()
+        token_address = str(transfer.get("token_address", "")).lower()
+        log_index = int(transfer.get("log_index", 0))
+        value_wei = int(transfer.get("value_wei", 0))
+        if value_wei < 0:
+            raise ValueError("flow-leg value_wei must be non-negative")
+        result = classify_flow_leg(
+            transfer,
+            decoded_events=event_map.get(tx_key, ()),
+            decoded_calls=call_map.get(tx_key, ()),
+            exploit_hashes=exploit_hashes,
+            recovery_hashes=recovery_hashes,
+            core_addresses=core_addresses,
+            role_by_address=role_by_address,
+        )
+        if result["flow_label"] not in FLOW_LEG_LABELS:
+            raise ValueError(f"unsupported flow-leg label: {result['flow_label']}")
+        rows.append(
+            {
+                "schema_version": D3_SCHEMA_VERSION,
+                "event_id": transfer.get("event_id", ""),
+                "chain_id": transfer.get("chain_id", 0),
+                "flow_leg_id": f"{tx_key}:{log_index}:{token_address}",
+                "tx_hash": tx_hash,
+                "block_number": transfer.get("block_number", 0),
+                "log_index": log_index,
+                "token_address": token_address,
+                "from_address": str(transfer.get("from_address", "")).lower(),
+                "to_address": str(transfer.get("to_address", "")).lower(),
+                "value_wei": str(value_wei),
+                "flow_label": result["flow_label"],
+                "matched_rules": json.dumps(result["matched_rules"]),
+                "evidence": json.dumps(result["evidence"], sort_keys=True),
+                "source_sha256": transfer.get("source_sha256", ""),
+            }
+        )
+    return rows
+
+
+def audit_flow_volume_by_token(
+    flow_legs: Sequence[Mapping[str, Any]], *, unknown_threshold: float = 0.05
+) -> list[dict[str, Any]]:
+    """Measure unknown flow share per token without mixing incompatible units."""
+    if not 0 <= unknown_threshold <= 1:
+        raise ValueError("unknown_threshold must be between zero and one")
+    totals: dict[str, int] = {}
+    unknown: dict[str, int] = {}
+    for leg in flow_legs:
+        token = str(leg.get("token_address", "")).lower()
+        value = int(leg.get("value_wei", 0))
+        if value < 0:
+            raise ValueError("flow-leg value_wei must be non-negative")
+        totals[token] = totals.get(token, 0) + value
+        if leg.get("flow_label") == "unknown":
+            unknown[token] = unknown.get(token, 0) + value
+    result: list[dict[str, Any]] = []
+    for token in sorted(totals):
+        total = totals[token]
+        share = unknown.get(token, 0) / total if total else None
+        result.append(
+            {
+                "token_address": token,
+                "total_value_wei": str(total),
+                "unknown_value_wei": str(unknown.get(token, 0)),
+                "unknown_flow_share": share,
+                "passed": share is not None and share <= unknown_threshold,
+                "threshold": unknown_threshold,
+            }
+        )
+    return result

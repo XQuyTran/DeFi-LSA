@@ -17,7 +17,9 @@ from .d3_decoding import (
     unknown_record,
 )
 from .d3_flow import (
+    audit_flow_volume_by_token,
     build_balance_inputs,
+    build_flow_legs,
     classify_addresses,
     classify_transaction,
     validate_incident_leg_ownership,
@@ -208,12 +210,36 @@ def run_d3(
     decoded_calls, unknown_calls = _decode_call_records(event_id, transactions, abi_fallback)
     unknown_records = aggregate_unknown_records(unknown_events + unknown_calls)
 
+    decoded_events_by_tx: dict[str, list[dict[str, Any]]] = {}
+    for row in decoded_events:
+        decoded_events_by_tx.setdefault(str(row["tx_hash"]).lower(), []).append(row)
+    decoded_calls_by_tx: dict[str, list[dict[str, Any]]] = {}
+    for row in decoded_calls:
+        decoded_calls_by_tx.setdefault(str(row["tx_hash"]).lower(), []).append(row)
+
     exploit_hashes = {
         value
         for value in {str(event.get("exploit_tx_hash", "")).lower()}
         if value
     }
     exploit_hashes.update(str(leg.transaction_hash).lower() for leg in incident_legs)
+    role_by_address = {
+        str(leg.actor_address).lower(): leg.role for leg in incident_legs
+    }
+    recovery_hashes = {
+        str(leg.transaction_hash).lower()
+        for leg in incident_legs
+        if str(leg.role).strip().lower() in {"recovery", "protocol_recovery"}
+    }
+    flow_legs = build_flow_legs(
+        transfers,
+        decoded_events_by_tx=decoded_events_by_tx,
+        decoded_calls_by_tx=decoded_calls_by_tx,
+        exploit_hashes=exploit_hashes,
+        recovery_hashes=recovery_hashes,
+        core_addresses=(leg.affected_address for leg in incident_legs),
+        role_by_address=role_by_address,
+    )
     classifications: list[dict[str, Any]] = []
     classification_by_tx: dict[str, dict[str, Any]] = {}
     for transaction in transactions:
@@ -240,9 +266,6 @@ def run_d3(
         classifications.append(row)
         classification_by_tx[tx_hash.lower()] = result
 
-    role_by_address = {
-        str(leg.actor_address).lower(): leg.role for leg in incident_legs
-    }
     actor_rows: list[dict[str, Any]] = []
     for transaction in transactions:
         addresses = [transaction.get("from_address"), transaction.get("to_address")]
@@ -301,6 +324,12 @@ def run_d3(
         "decoded_event_count": len(decoded_events),
         "decoded_call_count": len(decoded_calls),
         "unknown_event_count": len(unknown_records),
+        "flow_leg_count": len(flow_legs),
+        "flow_label_counts": {
+            label: sum(row["flow_label"] == label for row in flow_legs)
+            for label in sorted({row["flow_label"] for row in flow_legs})
+        },
+        "flow_volume_audit_by_token": audit_flow_volume_by_token(flow_legs),
         "exploit_transaction_count": len(exploit_hashes - {""}),
         "attribution_row_count": len(actor_rows),
         "incident_leg_validation": ownership,
@@ -311,6 +340,7 @@ def run_d3(
         staging = Path(temp)
         _write_parquet(decoded_events, "decoded_events", staging / "decoded_events.parquet")
         _write_parquet(decoded_calls, "decoded_calls", staging / "decoded_calls.parquet")
+        _write_parquet(flow_legs, "flow_legs", staging / "flow_legs.parquet")
         _write_parquet(classifications, "classified_transactions", staging / "classified_transactions.parquet")
         _write_parquet(actor_rows, "actor_roles", staging / "actor_roles.parquet")
         _write_parquet(resolved_legs, "incident_legs_resolved", staging / "incident_legs_resolved.parquet")
