@@ -127,7 +127,7 @@ class OrchestrationTests(unittest.TestCase):
             )
             self.assertEqual(
                 ctx.prices_path,
-                root / "data" / "raw" / "normalized" / "prices" / "coingecko" / "euler_2023-03-13.jsonl",
+                root / "reports" / "euler_2023-03-13" / "price_anchor_report.json",
             )
             self.assertEqual(
                 ctx.discourse_path,
@@ -455,29 +455,42 @@ class OrchestrationTests(unittest.TestCase):
             self.assertEqual(res.records_skipped, 1)  # 1 cached
             self.assertEqual(res.records_written, 1)  # 1 fetched
 
-    def test_collect_prices_coingecko(self) -> None:
+    def test_collect_prices_defillama_anchor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
 
-            chart_payload = {
-                "prices": [
-                    [1678697795000, 1650.5],
-                ]
+            addresses = {
+                "weth": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "dai": "0x6b175474e89094c44da98b954eedeac495271d0f",
+                "usdc": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
             }
 
             def mock_opener(req: Any, timeout: float = 30) -> MockHttpResponse:
-                return MockHttpResponse(chart_payload)
+                url = req.full_url
+                address = next(value for value in addresses.values() if value in url)
+                return MockHttpResponse({
+                    "coins": {
+                        f"ethereum:{address}": {
+                            "price": 1.0,
+                            "timestamp": 1678697700,
+                            "confidence": 0.99,
+                        }
+                    }
+                })
 
             ctx = _make_context(root, opener=mock_opener)
             res = ctx.collect_prices()
 
-            self.assertGreater(res.records_written, 0)
+            self.assertEqual(res.records_written, 3)
             self.assertTrue(ctx.prices_path.exists())
+            report = json.loads(ctx.prices_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["anchor_timestamp_utc"], "2023-03-13T08:56:34Z")
+            self.assertEqual(set(report["prices"]), {"WETH", "DAI", "USDC"})
 
-    def test_collect_prices_skips_disabled_coingecko(self) -> None:
+    def test_collect_prices_skips_disabled_defillama(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             opener = MagicMock()
-            config = SourceConfig(enabled_sources={"coingecko": False})
+            config = SourceConfig(enabled_sources={"defillama": False})
             ctx = _make_context(Path(tmp), source_config=config, opener=opener)
 
             result = ctx.collect_prices(source="auto")

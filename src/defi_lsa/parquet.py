@@ -69,6 +69,7 @@ _FLOAT64_FIELDS: frozenset[str] = frozenset(
     {
         "usd_price",
         "usd_price_anchor",
+        "anchor_price_confidence",
         "attacker_drain_token",
         "recovery_flow_token",
         "user_net_flow_token",

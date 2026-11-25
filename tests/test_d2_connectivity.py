@@ -41,7 +41,9 @@ def test_default_config_loads_committed_source_file(monkeypatch):
     monkeypatch.delenv("ETH_RPC_URL", raising=False)
     config = load_source_config()
 
-    assert config.source_priority["prices"] == ("chainlink", "onchain_pool", "coingecko")
+    assert config.source_priority["prices"] == ("defillama", "chainlink", "onchain_pool")
+    assert config.source_enabled("defillama")
+    assert not config.source_enabled("coingecko")
     assert config.aws_public_blockchain["bucket"] == "aws-public-blockchain"
 
 
@@ -138,6 +140,20 @@ def test_forum_probe_performs_json_request():
         config,
         "forums",
         opener=lambda request, timeout: FakeResponse({"topic_list": {"topics": []}}),
+    )
+
+    assert result.status == "reachable"
+
+
+def test_defillama_probe_checks_live_price_without_credentials():
+    config = make_config()
+    address = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+    result = probe_source(
+        config,
+        "defillama",
+        opener=lambda request, timeout: FakeResponse(
+            {"coins": {f"ethereum:{address}": {"price": 1900.0}}}
+        ),
     )
 
     assert result.status == "reachable"

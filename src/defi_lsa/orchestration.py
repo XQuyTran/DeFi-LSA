@@ -1,12 +1,13 @@
 """Collection context and stage dispatch for executable D2 runs."""
 
+import csv
 import json
 import hashlib
 import shutil
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -55,7 +56,7 @@ from .storage import (
     read_jsonl_records,
     source_path,
 )
-from .adapters.coingecko import CoinGeckoAdapter
+from .adapters.defillama import DefiLlamaAdapter
 from .adapters.discourse import DiscourseAdapter
 from .adapters.gdelt import GDELTAdapter
 from .adapters.protocol import ProtocolAnnouncementAdapter
@@ -63,6 +64,26 @@ from .adapters.protocol import ProtocolAnnouncementAdapter
 
 def _default_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _verified_price_anchor_timestamp(event_id: str) -> str | None:
+    evidence_path = _default_root() / "data" / "evidence" / "events_master_verified.csv"
+    if not evidence_path.exists():
+        return None
+    with evidence_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if row.get("event_id") != event_id:
+                continue
+            raw_timestamp = str(row.get("exploit_timestamp_utc", "")).strip()
+            if not raw_timestamp:
+                return None
+            timestamp = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00"))
+            if timestamp.tzinfo is None or timestamp.utcoffset() != timedelta(0):
+                raise ValueError(f"verified exploit timestamp for {event_id} must be UTC")
+            return (timestamp.astimezone(timezone.utc) - timedelta(seconds=1)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+    return None
 
 
 def _write_coverage_report(report: dict[str, Any], path: Path) -> None:
@@ -167,19 +188,15 @@ class CollectionContext:
 
     @property
     def prices_path(self) -> Path:
-        return (
-            self.output_root
-            / "data"
-            / "raw"
-            / "normalized"
-            / "prices"
-            / "coingecko"
-            / f"{self.event_id}.jsonl"
-        )
+        return self.price_anchor_report_path
 
     @property
     def prices_raw_dir(self) -> Path:
-        return self.output_root / "data" / "raw" / "source" / "coingecko" / self.event_id
+        return self.output_root / "data" / "raw" / "source" / "defillama" / self.event_id
+
+    @property
+    def price_anchor_report_path(self) -> Path:
+        return self.reports_dir / "price_anchor_report.json"
 
     @property
     def discourse_path(self) -> Path:
@@ -873,68 +890,64 @@ class CollectionContext:
 
         return CollectionResult(self.abi_dir, len(written_paths), cached_count)
 
-    def collect_prices(self, source: str = "coingecko") -> CollectionResult:
-        """Collect and normalize hourly token prices from CoinGecko for registered tokens."""
-        if not self.source_config.source_enabled("coingecko"):
+    def collect_prices(self, source: str = "auto") -> CollectionResult:
+        """Collect DefiLlama's fixed pre-incident price anchor for registered tokens."""
+        if not self.source_config.source_enabled("defillama"):
             return CollectionResult(self.prices_path, 0, 0)
-        if source == "auto" and "prices" in self.source_config.source_priority:
-            source = self.source_config.select_source("prices", {"coingecko"})
+        if source == "auto":
+            source = (
+                self.source_config.select_source("prices", {"defillama"})
+                if "prices" in self.source_config.source_priority
+                else "defillama"
+            )
+        if source != "defillama":
+            raise ValueError(f"unsupported fixed-anchor price source: {source}")
 
         self._handle_force("prices", [self.prices_path])
+        anchor_timestamp = _verified_price_anchor_timestamp(self.event_id)
+        if not anchor_timestamp:
+            report = {
+                "event_id": self.event_id,
+                "status": "SKIPPED",
+            "reason": "verified exploit_timestamp_utc is not registered",
+                "fallback_price_timestamp_utc": None,
+            }
+            _write_coverage_report(report, self.price_anchor_report_path)
+            return CollectionResult(self.price_anchor_report_path, 0, 1)
+
         tokens_file = _default_root() / "configs" / "tokens.json"
         if not tokens_file.exists():
-            return CollectionResult(self.prices_path, 0, 0)
+            return CollectionResult(self.price_anchor_report_path, 0, 0)
 
         tokens = load_token_registry(tokens_file)
-        start_dt = (
-            self.event.get("collection_start_utc")
-            or f"{self.event.get('event_date_utc', '2023-01-01')}T00:00:00Z"
-        )
-        end_dt = (
-            self.event.get("collection_end_utc")
-            or f"{self.event.get('event_date_utc', '2023-01-01')}T23:59:59Z"
-        )
-
         policy = RetryPolicy(max_attempts=self.source_config.maximum_attempts)
         limiter = RateLimiter(requests_per_second=self.source_config.requests_per_second)
-        adapter = CoinGeckoAdapter(
-            api_key=self.source_config.coingecko_api_key,
-            api_base_url=self.source_config.coingecko_api_url,
+        adapter = DefiLlamaAdapter(
+            api_base_url=self.source_config.defillama_api_url,
             retry_policy=policy,
             rate_limiter=limiter,
             opener=self.opener,
         )
-
-        total_written = 0
-        total_skipped = 0
         target_symbols = set(self.tokens_related)
-
-        for token in tokens:
-            symbol = token.get("symbol", "")
-            if target_symbols and symbol not in target_symbols:
-                continue
-            if token.get("status") != "verified" or not token.get("address"):
-                continue
-
-            address = token["address"]
-            coin_id = token.get("coingecko_id")
-            if not coin_id:
-                continue
-
-            report_file = self.reports_dir / f"price_coverage_{symbol.lower()}.json"
-            records = adapter.collect_hourly_prices(
-                token_address=address,
-                coin_id=coin_id,
-                event_id=self.event_id,
-                start_dt=start_dt,
-                end_dt=end_dt,
-                output_dir=self.output_root,
-                raw_dir=self.output_root,
-                coverage_report_path=report_file,
-            )
-            total_written += len(records)
-
-        return CollectionResult(self.prices_path, total_written, total_skipped)
+        target_tokens = [
+            token
+            for token in tokens
+            if (not target_symbols or token.get("symbol") in target_symbols)
+            and token.get("status") == "verified"
+            and token.get("address")
+        ]
+        result = adapter.fetch_anchor_prices(
+            event_id=self.event_id,
+            tokens=target_tokens,
+            anchor_timestamp=str(anchor_timestamp),
+            output_root=self.output_root,
+            report_path=self.price_anchor_report_path,
+        )
+        return CollectionResult(
+            self.price_anchor_report_path,
+            len(result["records"]),
+            len(result["missing_tokens"]),
+        )
 
     def collect_public_sources(self, source: str = "auto") -> dict[str, CollectionResult]:
         """Collect forum announcements, protocol feeds, and GDELT metadata."""
@@ -1042,7 +1055,7 @@ class CollectionContext:
             for table in extended_tables:
                 results[table] = self.collect_aws_table(table, source="aws")
         # 5. Prices
-        results["prices"] = self.collect_prices(source="auto" if source == "auto" else source)
+        results["prices"] = self.collect_prices(source="auto")
         # 6. Public Sources
         results["public_sources"] = self.collect_public_sources(source="auto" if source == "auto" else source)
         return results

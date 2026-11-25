@@ -36,11 +36,20 @@ def test_hourly_panel_distinguishes_empty_complete_from_missing_chain_data():
         flow_legs=legs,
         block_timestamps={10: 1678667400},
         anchor_prices={"WETH": 1600},
+        anchor_price_metadata={
+            "WETH": {
+                "source": "defillama",
+                "observed_timestamp_utc": "2023-03-13T00:55:00Z",
+                "confidence": 0.99,
+            }
+        },
     )
 
     assert rows[0]["data_status"] == "COMPLETE"
     assert rows[0]["user_net_flow_token"] == 2.0
     assert rows[0]["user_net_flow_usd"] == 3200.0
+    assert rows[0]["anchor_price_source"] == "defillama"
+    assert rows[0]["anchor_price_confidence"] == 0.99
     assert rows[1]["data_status"] == "MISSING_CHAIN_DATA"
     assert math.isnan(rows[1]["user_net_flow_token"])
     assert rows[0]["attacker_drain_token"] == 0.0

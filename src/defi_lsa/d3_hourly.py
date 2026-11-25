@@ -56,6 +56,7 @@ def build_hourly_panel(
     flow_legs: list[dict[str, Any]],
     block_timestamps: dict[int, int],
     anchor_prices: dict[str, Any],
+    anchor_price_metadata: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Aggregate classified flow legs onto a token-by-hour panel.
 
@@ -81,6 +82,7 @@ def build_hourly_panel(
 
     expected_hours = [start + timedelta(hours=index) for index in range(hours)]
     hour_index = {_hour_key(hour): hour for hour in expected_hours}
+    price_metadata = anchor_price_metadata or {}
     amounts: dict[tuple[str, str], dict[str, Decimal]] = {}
     for leg in flow_legs:
         token_address = str(leg.get("token_address", "")).lower()
@@ -123,6 +125,7 @@ def build_hourly_panel(
             and coverage.get("missing_receipts") == 0
         )
         for token in token_by_address.values():
+            metadata = price_metadata.get(token["symbol"], {})
             price = _finite_positive(
                 anchor_prices.get(token["address"], anchor_prices.get(token["symbol"]))
             )
@@ -139,6 +142,11 @@ def build_hourly_panel(
                 "data_status": "COMPLETE" if complete else "MISSING_CHAIN_DATA",
                 "price_status": "AVAILABLE" if price is not None else "MISSING_PRICE",
                 "usd_price_anchor": price if price is not None else math.nan,
+                "anchor_price_source": str(metadata.get("source", "provided_anchor")),
+                "anchor_price_observed_timestamp_utc": str(
+                    metadata.get("observed_timestamp_utc", "")
+                ),
+                "anchor_price_confidence": metadata.get("confidence", math.nan),
             }
             for label in _FLOW_TYPES + ("unknown",):
                 amount = float(amounts_for_hour.get(label, Decimal(0))) if complete else math.nan

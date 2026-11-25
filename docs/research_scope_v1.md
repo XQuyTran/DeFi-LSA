@@ -16,6 +16,6 @@ The mandatory asset set is WETH, DAI, USDC, WBTC, and wstETH. Collection depth i
 
 ## Scope gates
 
-E0 freezes the event, block window, asset set, evidence links, and alert benchmarks. E1 requires a strict D2 audit of the Euler window, with CoinGecko explicitly conditionally scoped when it is unavailable.
+E0 freezes the event, block window, asset set, evidence links, and alert benchmarks. E1 requires a strict D2 audit of the Euler window; DefiLlama supplies the fixed USD price anchor immediately before the exploit, while full-window hourly price coverage remains conditional.
 
 KyberSwap Elastic is conditional Ethereum-only validation and is not included unless Epic E6 is activated.

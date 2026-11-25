@@ -11,7 +11,7 @@ Close the remaining gaps between the current D2 component library and a runnable
 - E1.2 Complete Euler exploit transaction and asset-leg enumeration.
 - E1.3 Create Curve pool-level incident legs for CRV/ETH, pETH/ETH, msETH/ETH, and alETH/ETH, including exact transaction hashes, blocks, actors, and roles.
 - E1.4 Complete Ethereum-only KyberSwap affected-pool and exploit/front-run transaction enumeration.
-- E1.5 Add `configs/tokens.json` with token address, decimals, CoinGecko ID, and fallback price source.
+- E1.5 Add `configs/tokens.json` with token address, decimals, and fixed-anchor fallback source.
 - E1.6 Add `configs/public_sources.json` with forum URLs, topic IDs or search queries, official feed URLs, GDELT aliases, keywords, allowed domains, and collection windows.
 - E1.7 Validate and freeze registry version.
 
@@ -27,8 +27,8 @@ Close the remaining gaps between the current D2 component library and a runnable
 
 ### Tasks
 - E2.1 Add `configs/sources.json` using checked official base URLs.
-- E2.2 Load `ETH_RPC_URL`, `ETHERSCAN_API_KEY`, `COINGECKO_API_KEY`, and optional GitHub credentials exclusively from environment variables/Kaggle Secrets.
-- E2.3 Add true connectivity probes for RPC, Etherscan, CoinGecko, GDELT, forums, and AWS S3.
+- E2.2 Load `ETH_RPC_URL`, `ETHERSCAN_API_KEY`, and optional GitHub credentials exclusively from environment variables/Kaggle Secrets; DefiLlama requires no API key.
+- E2.3 Add true connectivity probes for RPC, Etherscan, DefiLlama, GDELT, forums, and AWS S3.
 - E2.4 Add source-priority rules by artifact type.
 - E2.5 Redact all credentials from logs, errors, manifests, and notebook outputs.
 
@@ -45,7 +45,7 @@ Close the remaining gaps between the current D2 component library and a runnable
 - E3.2 Wire `collect --stage logs` to adaptive chunked collection and checkpoints.
 - E3.3 Wire transaction discovery, transaction retrieval, and receipt retrieval.
 - E3.4 Wire ABI acquisition and cache.
-- E3.5 Wire CoinGecko price collection from token registry.
+- E3.5 Wire DefiLlama pre-incident price-anchor collection from token registry and verified event timestamp.
 - E3.6 Wire Discourse, protocol feed, and GDELT collection from public-source registry.
 - E3.7 Add `collect --stage all` with dependency ordering.
 - E3.8 Make `--resume`, `--dry-run`, and versioned `--force` behavior operational.

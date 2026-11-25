@@ -14,7 +14,7 @@
 * **Sự thật kỹ thuật đã xác nhận:**
 * Hạ tầng thu thập dữ liệu on-chain (AWS Public Blockchain, Etherscan ABI, CLI orchestration) đã hoàn thiện và kiểm thử *smoke run* thành công trên Euler Finance và KyberSwap Elastic.
 
-* CoinGecko API đang tắt do lỗi xác thực HTTP 401; Curve Finance chưa hoàn thiện xác minh các pool bị ảnh hưởng.
+* CoinGecko không còn được dùng; giá USD được neo bằng DefiLlama tại thời điểm ngay trước exploit. Curve Finance chưa hoàn thiện xác minh các pool bị ảnh hưởng.
 
 * Bản nộp trước gặp các lỗi: sử dụng `EVT_002`, `EVT_008` làm ví dụ nhưng tệp CSV rỗng; `EVT_004` có `attacker_outflow = 0`; gộp chung mọi địa chỉ ngoài attacker thành người dùng; thay giá thiếu và giờ trống bằng số `0`.
 
@@ -136,7 +136,7 @@ python -m defi_lsa collect \
 
 
 * **Đầu ra:** `data/raw/euler/*`, `reports/d2_audit_euler.md`, `data/processed/euler_price_anchor.parquet`.
-* **Tiêu chí nghiệm thu:** Báo cáo kiểm toán D2 đạt `GO` hoặc `CONDITIONAL_GO` được phê duyệt (chấp nhận tắt CoinGecko nếu dùng đơn vị Token gốc + giá neo $P(T_0^-)$).
+* **Tiêu chí nghiệm thu:** Báo cáo kiểm toán D2 đạt `GO` hoặc `CONDITIONAL_GO` được phê duyệt; lấy giá neo $P(T_0^-)$ từ DefiLlama, và yêu cầu giá cố định thủ công tại đúng timestamp neo nếu API không trả về quan sát hợp lệ.
 
 
 

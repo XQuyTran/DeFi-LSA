@@ -12,7 +12,7 @@
    - `collect --stage logs` executes adaptive chunked collection, scope evaluation, and checkpoints.
    - `collect --stage transactions` and `collect --stage receipts` wire hash discovery (from logs, registry anchors, and direct calls) to transaction and receipt retrieval.
    - `collect --stage abi` checks local cache and fetches missing ABIs via Etherscan.
-   - `collect --stage prices` collects verified token prices via CoinGecko and writes coverage reports.
+   - `collect --stage prices` fetches DefiLlama USD price anchors immediately before the verified exploit timestamp and writes provenance/fallback reports.
    - `collect --stage public_sources` (and `public_information`) queries Discourse, protocol feeds, and GDELT without storing copyrighted article bodies.
    - `collect --stage all` executes stages in deterministic dependency order (`abi` -> `logs` -> `transactions` -> `receipts` -> `prices` -> `public_sources`) and writes aggregated run summaries.
    - `--resume`, `--dry-run`, and versioned `--force` (preserving raw artifacts while archiving previous normalized outputs and resetting checkpoints) are operational in the CLI and context.
@@ -33,7 +33,7 @@
 
 5. **E8 smoke execution is implemented and partially demonstrated**
    - Live Euler and Kyber smoke collections run through the Kaggle workflow with isolated one-block and 100-block output roots, checkpoints, resume support, and D2 audit reports.
-   - CoinGecko is intentionally disabled because unauthenticated historical requests return HTTP 401; smoke audits may therefore report an explicitly approved `CONDITIONAL_GO`.
+   - CoinGecko is disabled. DefiLlama provides the fixed pre-incident anchor; D2 hourly price coverage remains conditional because one anchor is not a full-window hourly series.
    - Kyber range verification is instrumented in the notebook: it compares normalized log counts and block-number distributions between one-block and 100-block runs.
    - The audit CLI accepts the `kyber` alias and reports effective ranges, including whether the range differs from registry bounds.
    - Curve smoke, full event runs, and the broader Kyber contracts window remain pending. Kyber contracts has no rows for the selected exploit block and remains `NO_GO` for that table.
@@ -41,12 +41,12 @@
 6. **E7 runtime and Kaggle workflow are implemented**
    - Runtime preflight checks output-root writability and free space, detects restored roots, and records redacted results in collection summaries.
    - Collection and audit commands support paired effective block-range overrides; checkpoints and D2 reports distinguish smoke bounds from registry bounds.
-   - The Kaggle notebook selects restored output, installs the package, verifies imports, disables CoinGecko explicitly, runs isolated Euler/Kyber smoke roots, validates Kyber range sensitivity, and summarizes generated audit reports.
+   - The Kaggle notebook selects restored output, installs the package, verifies imports, runs isolated Euler/Kyber smoke roots, validates Kyber range sensitivity, and summarizes generated audit reports.
    - The notebook keeps full runs disabled until smoke gates and registry prerequisites pass.
 
 **Partial implementation**
 
-- **E2:** Source configuration and credential wiring are implemented. The CLI resolves the committed source configuration by default; shared probes cover RPC, Etherscan, CoinGecko, GDELT, AWS, and forums; response semantics, nested source settings, source enablement, and priority selection are validated; probes use the shared retry/rate-limit policy; and collection errors are redacted. Live connectivity verification, Kaggle runtime verification, credential-leak inspection across generated artifacts, and priority consumption for stages beyond the implemented logs path remain pending. The existing CoinGecko, Discourse, and GDELT adapters provide retry, persistence, normalization, and adapter-test coverage.
+- **E2:** Source configuration and credential wiring are implemented. The CLI resolves the committed source configuration by default; shared probes cover RPC, Etherscan, DefiLlama, GDELT, AWS, and forums; response semantics, nested source settings, source enablement, and priority selection are validated; probes use the shared retry/rate-limit policy; and collection errors are redacted. Live connectivity verification, Kaggle runtime verification, credential-leak inspection across generated artifacts, and priority consumption for stages beyond the implemented logs path remain pending. Discourse, GDELT, and DefiLlama adapters provide retry, persistence, normalization, and adapter-test coverage.
 - **E5:** ABI and proxy metadata hardening is complete. Etherscan V2 requests include `chainid=1`, shared retry/throttling and credential redaction are applied, raw responses and normalized ABIs are persisted, cache checksums and source URLs are validated, proxy implementations are resolved, local protocol-repository fallback is supported, and ABI coverage reports return `GO`, `CONDITIONAL_GO`, or `NO_GO`. The focused E5 suite and current test suite pass.
 - **E7:** Packaging, console entry point, runtime preflight, restored-root selection, notebook bootstrap, and smoke orchestration are implemented. A fresh-session destroy/export/restore/resume validation was not executed; this is an accepted operational risk.
-**Verdict:** **E1 (Registry Completion), E2 (Source Configuration), E3 (CLI Orchestration), E4 (Concrete AWS Adapter), E5 (ABI Hardening), and E7 (Runtime/Packaging) are implemented. E8 is partially demonstrated through Euler and Kyber smoke runs.** Accepted risks are the skipped fresh-session restore test, disabled CoinGecko price coverage, incomplete Curve registry readiness, Kyber contract-window coverage, and unexecuted full event runs. These risks are accepted for the current D2 status and do not constitute evidence that Curve or full-event datasets are ready for D3.
+**Verdict:** **E1 (Registry Completion), E2 (Source Configuration), E3 (CLI Orchestration), E4 (Concrete AWS Adapter), E5 (ABI Hardening), and E7 (Runtime/Packaging) are implemented. E8 is partially demonstrated through Euler and Kyber smoke runs.** Accepted risks are the skipped fresh-session restore test, incomplete full-window hourly price coverage, incomplete Curve registry readiness, Kyber contract-window coverage, and unexecuted full event runs. These risks are accepted for the current D2 status and do not constitute evidence that Curve or full-event datasets are ready for D3.

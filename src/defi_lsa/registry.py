@@ -17,7 +17,9 @@ from .identifiers import normalize_address, normalize_utc_timestamp
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 EXECUTABLE_STATUSES = frozenset({"GO", "GO_WITH_ETHEREUM_SCOPE"})
-TOKEN_REQUIRED_FIELDS = frozenset({"symbol", "chain_id", "address", "decimals", "coingecko_id", "fallback_price_source", "status"})
+TOKEN_REQUIRED_FIELDS = frozenset(
+    {"symbol", "chain_id", "address", "decimals", "fallback_price_source", "status"}
+)
 REQUIRED_COLUMNS = {
     "event_id",
     "protocol",
