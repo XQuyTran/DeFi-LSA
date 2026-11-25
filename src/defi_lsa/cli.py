@@ -4,6 +4,7 @@
 
 import argparse
 import json
+import traceback
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -238,10 +239,15 @@ def _collect_command(args: argparse.Namespace) -> int:
         summary_event = context.event_id if context is not None else args.event
         summary = output_root / summary_event / f"{metrics.run_id}.json"
         metrics.write_summary(summary)
+        traceback_tail = "\n".join(traceback.format_exc().splitlines()[-12:])
         print(json.dumps({
             "run_id": metrics.run_id,
             "status": "failed",
+            "stage": args.stage,
+            "source": args.source,
+            "error_type": type(exc).__name__,
             "error": redact_credentials(str(exc)),
+            "traceback_tail": redact_credentials(traceback_tail),
         }, sort_keys=True))
         return 1
 
