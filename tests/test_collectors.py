@@ -1,15 +1,19 @@
+import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.error import HTTPError
 
 from defi_lsa.collectors import (
     fetch_blocks,
     fetch_logs,
+    fetch_logs_chunked,
     fetch_receipts,
     fetch_transactions,
     fetch_hourly_prices,
     fetch_public_information,
+    json_rpc_client,
 )
 from defi_lsa.registry import ContractScope
 
@@ -106,3 +110,62 @@ class CollectorTests(unittest.TestCase):
             self.assertEqual(info.records_written, 1)
             self.assertEqual(len((root / "prices.jsonl").read_text().splitlines()), 1)
             json.loads((root / "info.jsonl").read_text())
+
+    def test_json_rpc_http_400_range_error_triggers_chunk_shrink(self) -> None:
+        calls: list[tuple[int, int]] = []
+
+        class _FakeResponse:
+            def __init__(self, payload: dict) -> None:
+                self._data = json.dumps(payload).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._data
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def opener(request, timeout=30):
+            req_body = json.loads(request.data.decode("utf-8"))
+            params = req_body["params"][0]
+            start = int(params["fromBlock"], 16)
+            end = int(params["toBlock"], 16)
+            calls.append((start, end))
+            if end - start + 1 > 10:
+                err_payload = json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": {
+                        "code": -32600,
+                        "message": "Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range.",
+                    },
+                }).encode("utf-8")
+                raise HTTPError(
+                    request.full_url,
+                    400,
+                    "Bad Request",
+                    {},
+                    io.BytesIO(err_payload),
+                )
+            return _FakeResponse({"jsonrpc": "2.0", "id": 1, "result": []})
+
+        rpc = json_rpc_client("https://rpc.example.test", opener=opener)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = fetch_logs_chunked(
+                rpc,
+                100,
+                119,
+                SCOPE,
+                root / "logs.jsonl",
+                initial_chunk_size=20,
+                min_chunk_size=10,
+                max_chunk_size=20,
+                sleep_fn=lambda _: None,
+            )
+        self.assertEqual(result.records_written, 0)
+        self.assertEqual(calls[0], (100, 119))
+        self.assertEqual(calls[1], (100, 109))
+        self.assertEqual(calls[2], (110, 119))

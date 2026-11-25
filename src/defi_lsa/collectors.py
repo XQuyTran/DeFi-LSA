@@ -12,6 +12,7 @@ import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .abi import (
@@ -98,8 +99,22 @@ def json_rpc_client(
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with opener(request, timeout=timeout) as response:
-            body = json.loads(response.read().decode("utf-8"))
+        try:
+            with opener(request, timeout=timeout) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            if exc.code in (400, 413, 422):
+                raw_err = ""
+                try:
+                    raw_err = exc.read().decode("utf-8", errors="replace")
+                    err_body = json.loads(raw_err)
+                except Exception:
+                    err_body = None
+                if isinstance(err_body, dict) and err_body.get("error"):
+                    raise RuntimeError(f"{method} failed (HTTP {exc.code}): {err_body['error']}") from exc
+                if raw_err:
+                    raise RuntimeError(f"{method} failed (HTTP {exc.code}): {raw_err}") from exc
+            raise
         if body.get("error"):
             raise RuntimeError(f"{method} failed: {body['error']}")
         if "result" not in body:
