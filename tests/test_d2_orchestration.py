@@ -332,6 +332,43 @@ class OrchestrationTests(unittest.TestCase):
             )
             self.assertEqual(report["status"], "match")
 
+    def test_auto_transaction_source_falls_back_from_aws_http_400(self) -> None:
+        tx_hash = "0x47ac3527d02e6b9631c77fad1cdee7bfa77a8a7bfd4880dccbda5146ace4088f"
+        aws_adapter = MagicMock()
+        aws_adapter.fetch_table.side_effect = RuntimeError("HTTP Error 400: Bad Request")
+
+        def rpc_handler(method: str, params: list[Any]) -> Any:
+            if method == "eth_getTransactionByHash":
+                return {
+                    "hash": tx_hash,
+                    "blockNumber": hex(16818024),
+                    "from": "0xb2698c2d99ad2c302a95a8db26b08d17a77cedd4",
+                    "to": "0x27182842e098f60e3d576794a5bffb0777e025d3",
+                    "value": "0x0",
+                    "gas": "0x5208",
+                    "gasPrice": "0x1",
+                    "nonce": "0x0",
+                }
+            raise AssertionError(f"unexpected rpc method {method}")
+
+        config = SourceConfig(
+            ethereum_rpc_url="https://rpc.example.test/token",
+            source_priority={"transactions": ("aws_public_blockchain", "ethereum_rpc")},
+        )
+        discovered = DiscoveredTransactions({(tx_hash, ("registry_anchor",))})
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(Path(tmp), source_config=config)
+            with patch.object(CollectionContext, "aws_adapter", new_callable=PropertyMock) as aws_property, patch.object(
+                CollectionContext, "discover_transactions", return_value=discovered
+            ), patch.object(
+                CollectionContext, "_rpc_caller", return_value=(rpc_handler, MagicMock())
+            ):
+                aws_property.return_value = aws_adapter
+                result = ctx.collect_transactions(source="auto")
+
+            self.assertEqual(result.records_written, 1)
+            self.assertEqual(read_jsonl_records(ctx.transactions_path)[0]["source"], "rpc")
+
     def test_collect_aws_table_streams_batches_to_normalized_storage(self) -> None:
         batch = [{
             "number": 16818024,
