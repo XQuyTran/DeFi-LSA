@@ -219,6 +219,37 @@ def read_jsonl_records(path: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+def _load_existing_record_keys(path: Path, key_field: str) -> set[str]:
+    """Load deduplication keys line-by-line and quarantine trailing corruption."""
+    if not path.exists():
+        return set()
+
+    keys: set[str] = set()
+    last_good_offset = 0
+    with path.open("r+b") as handle:
+        while line := handle.readline():
+            line_end = handle.tell()
+            text = line.decode("utf-8", errors="replace")
+            if not text.strip():
+                last_good_offset = line_end
+                continue
+            try:
+                record = json.loads(text)
+            except json.JSONDecodeError:
+                remaining = handle.read()
+                if any(item.strip() for item in remaining.splitlines()):
+                    raise
+                handle.seek(last_good_offset)
+                quarantine = handle.read()
+                path.with_suffix(".quarantine").write_bytes(quarantine)
+                handle.seek(last_good_offset)
+                handle.truncate()
+                break
+            keys.add(str(record[key_field]))
+            last_good_offset = line_end
+    return keys
+
+
 def append_normalized_records(
     path: Path,
     records: Iterable[Mapping[str, Any]],
@@ -247,11 +278,8 @@ def append_normalized_records(
     """
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1. Load existing keys (use read_jsonl_records for quarantine safety).
-    existing_keys: set[str] = set()
-    if path.exists():
-        for rec in read_jsonl_records(path):
-            existing_keys.add(str(rec[key_field]))
+    # 1. Load existing keys without retaining every decoded record in memory.
+    existing_keys = _load_existing_record_keys(path, key_field)
 
     # 2. Serialise new records to a sibling temp file.
     written = skipped = 0

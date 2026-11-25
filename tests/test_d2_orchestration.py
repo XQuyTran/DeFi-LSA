@@ -5,6 +5,7 @@ public sources, all), dry-run planning, checkpoint resumption, versioned force,
 and CLI invocations with deterministic stubs and no live network calls.
 """
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -330,6 +331,31 @@ class OrchestrationTests(unittest.TestCase):
                 )
             )
             self.assertEqual(report["status"], "match")
+
+    def test_collect_aws_table_streams_batches_to_normalized_storage(self) -> None:
+        batch = [{
+            "number": 16818024,
+            "timestamp": 1678708800,
+            "gas_used": 100,
+            "hash": "0x" + "a" * 64,
+        }]
+        aws_adapter = MagicMock()
+        aws_adapter.iter_table_batches.return_value = iter([batch])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(Path(tmp))
+            with patch.object(CollectionContext, "aws_adapter", new_callable=PropertyMock) as aws_property:
+                aws_property.return_value = aws_adapter
+                result = ctx.collect_aws_table("blocks")
+
+            records = read_jsonl_records(ctx.blocks_path)
+            self.assertEqual(result.records_written, 1)
+            self.assertEqual(records[0]["source"], "aws")
+            expected_digest = hashlib.sha256(
+                json.dumps(batch, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
+            self.assertEqual(result.source_sha256, expected_digest)
+            aws_adapter.iter_table_batches.assert_called_once()
 
     def test_auto_transaction_source_selects_configured_aws(self) -> None:
         config = SourceConfig(

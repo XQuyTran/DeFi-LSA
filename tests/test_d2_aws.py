@@ -4,6 +4,7 @@ from defi_lsa.aws import (
     AwsSchemaError,
     estimate_block_date,
     filter_aws_records_by_scope,
+    _build_filter_expression,
     normalize_aws_block_record,
     normalize_aws_contract_record,
     normalize_aws_log_record,
@@ -73,6 +74,49 @@ def test_aws_query_seam_preserves_filters_and_table_contracts():
         "traces",
         "contracts",
     }
+
+
+def test_aws_batch_iterator_preserves_query_seam_rows():
+    rows = [{"number": 12}, {"number": 13}]
+    adapter = AwsPublicBlockchainAdapter(lambda *_: rows)
+
+    assert list(adapter.iter_table_batches("blocks", start_block=12, end_block=13)) == [rows]
+    assert adapter.fetch_table("blocks", start_block=12, end_block=13) == rows
+
+
+def test_arrow_batches_filter_nullable_address_columns():
+    import pytest
+
+    pa = pytest.importorskip("pyarrow")
+    ds = pytest.importorskip("pyarrow.dataset")
+    count = 10000
+    table = pa.table({
+        "transaction_hash": [f"0x{index:064x}" for index in range(count)],
+        "trace_address": ["[]"] * count,
+        "block_number": pa.array([16818024] * count, type=pa.int64()),
+        "from_address": pa.array(
+            ["0xabc" if index % 2 == 0 else None for index in range(count)],
+            type=pa.string(),
+        ),
+        "to_address": pa.nulls(count),
+        "value": pa.array([0] * count, type=pa.int64()),
+    })
+    dataset = ds.dataset(table)
+    filters = {
+        "start_block": 16818024,
+        "end_block": 16818024,
+        "addresses": ["0xabc"],
+    }
+    expression = _build_filter_expression(
+        ds, AWS_TABLE_CONTRACTS["traces"], filters, dataset.schema
+    )
+    batch_sizes = [
+        len(batch)
+        for batch in dataset.scanner(filter=expression, batch_size=8192).to_batches()
+    ]
+
+    assert sum(batch_sizes) == count // 2
+    assert max(batch_sizes) <= 8192
 
 
 def test_aws_block_filter_ignores_transaction_hash_without_block_column():

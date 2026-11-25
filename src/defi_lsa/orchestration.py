@@ -569,26 +569,40 @@ class CollectionContext:
         if table not in paths:
             raise ValueError(f"unsupported extended AWS collection table {table!r}")
         self._handle_force(table, [paths[table]])
-        rows = self.aws_adapter.fetch_table(
-            table,
-            start_date=self.start_date,
-            end_date=self.end_date,
-            start_block=self.start_block,
-            end_block=self.end_block,
-            addresses=self.scope.addresses,
-        )
-        source_sha = hashlib.sha256(
-            json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
-        ).hexdigest()
-        records = [normalizers[table](row, self.event_id, source_sha) for row in rows]
+        source_digest = hashlib.sha256()
+        source_digest.update(b"[")
+        first_row = True
+
+        def normalized_records() -> Iterable[dict[str, Any]]:
+            nonlocal first_row
+            for rows in self.aws_adapter.iter_table_batches(
+                table,
+                start_date=self.start_date,
+                end_date=self.end_date,
+                start_block=self.start_block,
+                end_block=self.end_block,
+                addresses=self.scope.addresses,
+            ):
+                batch_payload = json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
+                batch_digest = hashlib.sha256(batch_payload).hexdigest()
+                for row in rows:
+                    if not first_row:
+                        source_digest.update(b", ")
+                    source_digest.update(
+                        json.dumps(row, sort_keys=True, default=str).encode("utf-8")
+                    )
+                    first_row = False
+                    yield normalizers[table](row, self.event_id, batch_digest)
+            source_digest.update(b"]")
+
         written, skipped = append_normalized_records(
-            paths[table], records, key_field="record_key"
+            paths[table], normalized_records(), key_field="record_key"
         )
         return CollectionResult(
             paths[table],
             written,
             skipped,
-            source_sha256=source_sha,
+            source_sha256=source_digest.hexdigest(),
         )
 
     def collect_logs(self, source: str = "rpc") -> CollectionResult:

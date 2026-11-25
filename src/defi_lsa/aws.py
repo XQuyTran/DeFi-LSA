@@ -110,14 +110,16 @@ class AwsPublicBlockchainAdapter:
         ]
 
     def fetch_aws_blocks(self, start_block: int, end_block: int) -> list[dict[str, Any]]:
-        return self._fetch("blocks", start_block=start_block, end_block=end_block)
+        return self.fetch_table("blocks", start_block=start_block, end_block=end_block)
 
     def fetch_aws_transactions(self, start_block: int, end_block: int) -> list[dict[str, Any]]:
-        return self._fetch("transactions", start_block=start_block, end_block=end_block)
+        return self.fetch_table("transactions", start_block=start_block, end_block=end_block)
 
     def fetch_aws_logs(self, start_block: int, end_block: int, addresses: Iterable[str] = ()) -> list[dict[str, Any]]:
         scope_addresses = list(addresses)
-        rows = self._fetch("logs", start_block=start_block, end_block=end_block, addresses=scope_addresses)
+        rows = self.fetch_table(
+            "logs", start_block=start_block, end_block=end_block, addresses=scope_addresses
+        )
         return filter_aws_records_by_scope(rows, scope_addresses) if scope_addresses else list(rows)
 
     def fetch_table(
@@ -132,7 +134,33 @@ class AwsPublicBlockchainAdapter:
         addresses: Iterable[str] = (),
     ) -> list[dict[str, Any]]:
         """Read a table and apply supported filters before returning records."""
-        return self._fetch(
+        return [
+            row
+            for batch in self.iter_table_batches(
+                table,
+                start_date=start_date,
+                end_date=end_date,
+                start_block=start_block,
+                end_block=end_block,
+                transaction_hashes=transaction_hashes,
+                addresses=addresses,
+            )
+            for row in batch
+        ]
+
+    def iter_table_batches(
+        self,
+        table: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        start_block: int | None = None,
+        end_block: int | None = None,
+        transaction_hashes: Iterable[str] = (),
+        addresses: Iterable[str] = (),
+    ) -> Iterable[list[dict[str, Any]]]:
+        """Yield filtered table rows in bounded batches."""
+        yield from self._fetch(
             table,
             start_date=start_date,
             end_date=end_date,
@@ -142,12 +170,15 @@ class AwsPublicBlockchainAdapter:
             addresses=list(addresses),
         )
 
-    def _fetch(self, table: str, **filters: Any) -> list[dict[str, Any]]:
+    def _fetch(self, table: str, **filters: Any) -> Iterable[list[dict[str, Any]]]:
         if table not in AWS_TABLE_CONTRACTS:
             raise ValueError(f"unsupported AWS table {table!r}")
         if self.query is not None:
             query_filters = {key: value for key, value in filters.items() if value is not None}
-            return list(self.query(table, query_filters))
+            rows = list(self.query(table, query_filters))
+            if rows:
+                yield rows
+            return
         if self.filesystem is None:
             self.filesystem = _anonymous_filesystem(self.region)
         contract = AWS_TABLE_CONTRACTS[table]
@@ -183,10 +214,12 @@ class AwsPublicBlockchainAdapter:
             raise FileNotFoundError(f"no Parquet files found for AWS partitions: {paths}")
         dataset = ds.dataset(dataset_paths, filesystem=self.filesystem, format="parquet")
         self._validate_columns(dataset.schema.names, contract)
-        expression = _build_filter_expression(ds, contract, filters)
-        table_data = dataset.to_table(filter=expression)
-        rows = table_data.to_pylist()
-        return _post_filter_rows(rows, contract, filters)
+        expression = _build_filter_expression(ds, contract, filters, dataset.schema)
+        scanner = dataset.scanner(filter=expression, batch_size=8192)
+        for record_batch in scanner.to_batches():
+            rows = _post_filter_rows(record_batch.to_pylist(), contract, filters)
+            if rows:
+                yield rows
 
     def _partition_paths(self, table: str, start_date: str | None, end_date: str | None) -> list[str]:
         if start_date is None and end_date is None:
@@ -291,7 +324,12 @@ def _aws_trace_address(value: Any) -> Any:
     return value
 
 
-def _build_filter_expression(dataset_module: Any, contract: AwsTableContract, filters: Mapping[str, Any]) -> Any:
+def _build_filter_expression(
+    dataset_module: Any,
+    contract: AwsTableContract,
+    filters: Mapping[str, Any],
+    schema: Any | None = None,
+) -> Any:
     expression = None
     if filters.get("start_block") is not None:
         expression = dataset_module.field(contract.block_column) >= filters["start_block"]
@@ -302,6 +340,20 @@ def _build_filter_expression(dataset_module: Any, contract: AwsTableContract, fi
     if transaction_hashes and contract.transaction_column in contract.required_columns:
         condition = dataset_module.field(contract.transaction_column).isin(transaction_hashes)
         expression = condition if expression is None else expression & condition
+    addresses = [str(value).lower() for value in filters.get("addresses", ())]
+    address_columns = contract.address_columns
+    if schema is not None:
+        address_columns = tuple(
+            column
+            for column in address_columns
+            if column in schema.names and str(schema.field(column).type) != "null"
+        )
+    address_expression = None
+    for column in address_columns if addresses else ():
+        condition = dataset_module.field(column).isin(addresses)
+        address_expression = condition if address_expression is None else address_expression | condition
+    if address_expression is not None:
+        expression = address_expression if expression is None else expression & address_expression
     return expression
 
 
