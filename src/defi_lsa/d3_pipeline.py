@@ -317,10 +317,18 @@ def run_d3(
         leg_by_tx=leg_by_tx,
     )
 
+    quality_checks = {
+        "decoded_activity_present": bool(decoded_events or decoded_calls),
+        "flow_legs_present": bool(flow_legs),
+    }
     report = {
-        "status": "GO",
+        "status": "GO" if all(quality_checks.values()) else "CONDITIONAL_GO",
         "event_id": event_id,
         "d2_gate_status": d2_report.get("status"),
+        "quality_checks": quality_checks,
+        "corrective_actions": [
+            check for check, passed in quality_checks.items() if not passed
+        ],
         "decoded_event_count": len(decoded_events),
         "decoded_call_count": len(decoded_calls),
         "unknown_event_count": len(unknown_records),

@@ -156,6 +156,21 @@ def test_aws_transaction_filter_uses_transaction_hash_column():
     ) == [matching]
 
 
+def test_aws_block_filter_ignores_address_scope():
+    block = {
+        "number": 12,
+        "timestamp": 1678708800,
+        "gas_used": 1,
+        "hash": "0x" + "a" * 64,
+    }
+
+    assert _post_filter_rows(
+        [block],
+        AWS_TABLE_CONTRACTS["blocks"],
+        {"start_block": 12, "end_block": 12, "addresses": ["0x" + "3" * 40]},
+    ) == [block]
+
+
 def test_aws_scope_filter_matches_sender_recipient_or_emitter():
     rows = [
         {"from": "0xA", "to": "0xB", "address": "0xC"},
@@ -216,6 +231,26 @@ def test_aws_rows_use_canonical_record_shapes():
     assert block["source"] == "aws"
     assert transaction["record_key"] == "0x" + "b" * 64
     assert log["record_key"] == f"1:0x{'b' * 64}:0"
+
+
+def test_aws_transaction_normalization_preserves_input_data():
+    transaction = normalize_aws_transaction_record(
+        {
+            "hash": "0x" + "b" * 64,
+            "block_number": 12,
+            "from_address": "0x" + "1" * 40,
+            "to_address": "0x" + "2" * 40,
+            "value": 0,
+            "gas": 21000,
+            "gas_price": 1,
+            "nonce": 0,
+            "input": "0x12345678abcd",
+        },
+        "event",
+        "c" * 64,
+    )
+
+    assert transaction["input_data"] == "0x12345678abcd"
 
 
 def test_aws_extended_rows_preserve_exact_values_and_identity():

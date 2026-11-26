@@ -375,7 +375,11 @@ def _post_filter_rows(rows: Iterable[Mapping[str, Any]], contract: AwsTableContr
             and str(row.get(contract.transaction_column, "")).lower() not in hashes
         ):
             continue
-        if addresses and not any(str(row.get(column, "")).lower() in addresses for column in contract.address_columns):
+        if (
+            addresses
+            and contract.address_columns
+            and not any(str(row.get(column, "")).lower() in addresses for column in contract.address_columns)
+        ):
             continue
         selected.append(dict(row))
     return selected
@@ -426,6 +430,7 @@ def normalize_aws_transaction_record(
         "gas": record.get("gas"),
         "gasPrice": _aws_quantity(record.get("gas_price"), "gas_price"),
         "nonce": record.get("nonce"),
+        "input": record.get("input", record.get("input_data", "0x")),
         "chainId": record.get("chain_id", 1),
         "source": "aws",
     }

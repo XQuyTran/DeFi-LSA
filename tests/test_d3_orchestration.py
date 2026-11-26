@@ -48,6 +48,36 @@ def test_d3_does_not_run_on_d2_no_go(tmp_path: Path):
         run_d3("evt", output_root=tmp_path, events_path=events, incident_legs_path=legs)
 
 
+def test_d3_marks_empty_analytical_outputs_conditional(tmp_path: Path):
+    event_id = "evt"
+    report_dir = tmp_path / "reports" / event_id
+    report_dir.mkdir(parents=True)
+    (report_dir / "d2_collection_audit.json").write_text(
+        json.dumps({"status": "CONDITIONAL_GO"}), encoding="utf-8"
+    )
+    events = tmp_path / "events.json"
+    events.write_text(json.dumps([{"event_id": event_id}]))
+    legs = tmp_path / "legs.json"
+    legs.write_text("[]", encoding="utf-8")
+
+    report = run_d3(
+        event_id,
+        output_root=tmp_path,
+        events_path=events,
+        incident_legs_path=legs,
+    )
+
+    assert report["status"] == "CONDITIONAL_GO"
+    assert report["quality_checks"] == {
+        "decoded_activity_present": False,
+        "flow_legs_present": False,
+    }
+    assert report["corrective_actions"] == [
+        "decoded_activity_present",
+        "flow_legs_present",
+    ]
+
+
 def test_d3_publishes_canonical_artifacts_from_synthetic_d2_records(tmp_path: Path):
     event_id = "evt"
     contract = "0x" + "aa" * 20

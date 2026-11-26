@@ -325,6 +325,7 @@ class OrchestrationTests(unittest.TestCase):
             self.assertEqual(result.records_written, 1)
             self.assertEqual(read_jsonl_records(ctx.transactions_path)[0]["source"], "aws")
             aws_adapter.fetch_table.assert_called_once()
+            self.assertNotIn("addresses", aws_adapter.fetch_table.call_args.kwargs)
             report = json.loads(
                 (ctx.reports_dir / "transactions_aws_rpc_reconciliation.json").read_text(
                     encoding="utf-8"
@@ -393,6 +394,20 @@ class OrchestrationTests(unittest.TestCase):
             ).hexdigest()
             self.assertEqual(result.source_sha256, expected_digest)
             aws_adapter.iter_table_batches.assert_called_once()
+
+    def test_token_transfer_collection_includes_registered_token_addresses(self) -> None:
+        aws_adapter = MagicMock()
+        aws_adapter.iter_table_batches.return_value = iter([])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(Path(tmp))
+            with patch.object(CollectionContext, "aws_adapter", new_callable=PropertyMock) as aws_property:
+                aws_property.return_value = aws_adapter
+                ctx.collect_aws_table("token_transfers")
+
+        requested_addresses = aws_adapter.iter_table_batches.call_args.kwargs["addresses"]
+        self.assertIn("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", requested_addresses)
+        self.assertIn("0x6b175474e89094c44da98b954eedeac495271d0f", requested_addresses)
 
     def test_auto_transaction_source_selects_configured_aws(self) -> None:
         config = SourceConfig(

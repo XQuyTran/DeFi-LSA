@@ -67,6 +67,48 @@ def test_decode_function_input():
     assert decoded["arguments"] == {"receiver": receiver, "amount": 456}
 
 
+def test_aws_transaction_input_survives_normalization_and_d3_decoding():
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from defi_lsa.abi import LocalABIFallback
+    from defi_lsa.aws import normalize_aws_transaction_record
+    from defi_lsa.d3_pipeline import _decode_call_records
+
+    address = "0x" + "44" * 20
+    receiver = "0x" + "33" * 20
+    input_data = function_selector(FLASH_LOAN_FUNCTION) + encode(
+        ["address", "uint256"], [receiver, 456]
+    ).hex()
+    transaction = normalize_aws_transaction_record(
+        {
+            "hash": "0x" + "b" * 64,
+            "block_number": 12,
+            "from_address": "0x" + "11" * 20,
+            "to_address": address,
+            "value": 0,
+            "gas": 21000,
+            "gas_price": 1,
+            "nonce": 0,
+            "input": input_data,
+        },
+        "event",
+        "c" * 64,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, f"{address}.json").write_text(json.dumps([FLASH_LOAN_FUNCTION]))
+        decoded, unknown = _decode_call_records(
+            "event", [transaction], LocalABIFallback(Path(tmp))
+        )
+
+    assert len(decoded) == 1
+    assert decoded[0]["function_name"] == "flashLoan"
+    assert decoded[0]["raw_input"] == input_data
+    assert unknown == []
+
+
 def test_unknown_records_are_aggregated_without_decoder_failure():
     records = [
         unknown_record(

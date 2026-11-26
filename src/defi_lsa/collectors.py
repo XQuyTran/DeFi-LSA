@@ -392,10 +392,8 @@ def fetch_abi(
                 paths.append(abi_path)
                 continue
 
-        # 4. Address is unresolvable — raise so caller can decide gate status
-        raise RuntimeError(
-            f"ABI unavailable for {address}: Etherscan failed and no local fallback found"
-        )
+        # Keep collecting later addresses; coverage reporting marks this one missing.
+        continue
 
     return paths
 

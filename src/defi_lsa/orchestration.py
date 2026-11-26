@@ -292,6 +292,22 @@ class CollectionContext:
                 clean_tokens.append(sym)
         return tuple(sorted(set(clean_tokens)))
 
+    @property
+    def transfer_scope_addresses(self) -> tuple[str, ...]:
+        addresses = set(self.scope.addresses)
+        tokens_file = _default_root() / "configs" / "tokens.json"
+        if tokens_file.exists():
+            target_symbols = set(self.tokens_related)
+            for token in load_token_registry(tokens_file):
+                address = token.get("address")
+                if (
+                    token.get("symbol") in target_symbols
+                    and token.get("status") == "verified"
+                    and address
+                ):
+                    addresses.add(normalize_address(str(address)))
+        return tuple(sorted(addresses))
+
     def _required_block(self, name: str) -> int:
         value = self.event.get(name)
         if value is None:
@@ -592,13 +608,18 @@ class CollectionContext:
 
         def normalized_records() -> Iterable[dict[str, Any]]:
             nonlocal first_row
+            addresses: tuple[str, ...] = ()
+            if table == "token_transfers":
+                addresses = self.transfer_scope_addresses
+            elif table != "blocks":
+                addresses = self.scope.addresses
             for rows in self.aws_adapter.iter_table_batches(
                 table,
                 start_date=self.start_date,
                 end_date=self.end_date,
                 start_block=self.start_block,
                 end_block=self.end_block,
-                addresses=self.scope.addresses,
+                addresses=addresses,
             ):
                 batch_payload = json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
                 batch_digest = hashlib.sha256(batch_payload).hexdigest()
@@ -734,7 +755,6 @@ class CollectionContext:
                     start_block=self.start_block,
                     end_block=self.end_block,
                     transaction_hashes=hashes,
-                    addresses=self.scope.addresses,
                 )
             except Exception as exc:
                 if not auto_requested:
