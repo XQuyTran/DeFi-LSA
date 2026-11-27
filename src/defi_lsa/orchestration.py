@@ -835,12 +835,13 @@ class CollectionContext:
         )
 
     def collect_abi(self, source: str = "etherscan") -> CollectionResult:
-        """Acquire verified contract ABIs for scoped addresses (E5 hardened).
+        """Acquire verified ABIs for registry and observed call-target addresses.
 
         Collects ABIs using Etherscan V2 with ``chainid=1``, shared retry and
         throttling policies, immutable raw-response persistence, ABI cache
         validation via checksum, proxy contract resolution, and a local
-        protocol-repository fallback.
+        protocol-repository fallback. Transaction destinations with non-empty
+        calldata are included when normalized transactions are available.
 
         After collection, writes an ABI coverage report to
         ``reports/<event_id>/abi_coverage_report.json`` and updates the
@@ -860,10 +861,18 @@ class CollectionContext:
         # Determine local protocol-repository fallback directory
         protocol_abis_dir = _default_root() / "configs" / "protocol_abis"
 
+        abi_addresses = set(self.scope.addresses)
+        abi_addresses.update(
+            str(record.get("to_address", "")).lower()
+            for record in read_jsonl_records(self.transactions_path)
+            if record.get("to_address")
+            and str(record.get("input_data", "0x")).lower() not in {"", "0x"}
+        )
+
         # Validate existing cache entries via checksum (E5.4)
         cached_count = 0
         missing_addresses = []
-        for address in self.scope.addresses:
+        for address in sorted(abi_addresses):
             abi_path = self.abi_dir / f"{address.lower()}.json"
             meta_path = self.abi_dir / f"{address.lower()}.meta.json"
             if abi_path.exists() and not self.force:
@@ -899,7 +908,7 @@ class CollectionContext:
         if not missing_addresses:
             # All cached and valid — still write coverage report
             coverage = compute_abi_coverage_report(
-                self.scope.addresses, self.abi_dir, event_id=self.event_id
+                abi_addresses, self.abi_dir, event_id=self.event_id
             )
             _write_coverage_report(coverage, self.reports_dir / "abi_coverage_report.json")
             return CollectionResult(self.abi_dir, 0, cached_count)
@@ -938,7 +947,7 @@ class CollectionContext:
 
         # Write ABI coverage report (E5 acceptance criteria)
         coverage = compute_abi_coverage_report(
-            self.scope.addresses, self.abi_dir, event_id=self.event_id
+            abi_addresses, self.abi_dir, event_id=self.event_id
         )
         _write_coverage_report(coverage, self.reports_dir / "abi_coverage_report.json")
 
@@ -1089,16 +1098,15 @@ class CollectionContext:
     def collect_all(self, source: str = "auto") -> dict[str, Any]:
         """Execute all collection stages in strict dependency order.
 
-        Order: abi -> logs -> transactions -> receipts -> prices -> public_sources.
+        Order: logs -> transactions -> abi -> receipts -> prices -> public_sources.
         """
         results: dict[str, Any] = {}
-        # 1. ABI
-        results["abi"] = self.collect_abi(source="auto" if source == "auto" else source)
-        # 2. Logs
+        # Logs discover the transaction hashes whose destinations need ABIs.
         results["logs"] = self.collect_logs(source="auto" if source == "auto" else source)
-        # 3. Transactions
         results["transactions"] = self.collect_transactions(source="auto" if source == "auto" else source)
-        # 4. Receipts
+        # Fetch registry and observed-call-target ABIs after transactions exist.
+        results["abi"] = self.collect_abi(source="auto" if source == "auto" else source)
+        # Receipts
         results["receipts"] = self.collect_receipts(source="auto" if source == "auto" else source)
         extended_tables = ("blocks", "token_transfers", "traces", "contracts")
         should_collect_extended = source in ("aws", "aws_public_blockchain") or (
@@ -1108,8 +1116,8 @@ class CollectionContext:
         if should_collect_extended:
             for table in extended_tables:
                 results[table] = self.collect_aws_table(table, source="aws")
-        # 5. Prices
+        # Prices
         results["prices"] = self.collect_prices(source="auto")
-        # 6. Public Sources
+        # Public sources
         results["public_sources"] = self.collect_public_sources(source="auto" if source == "auto" else source)
         return results

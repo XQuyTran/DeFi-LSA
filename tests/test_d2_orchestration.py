@@ -507,6 +507,32 @@ class OrchestrationTests(unittest.TestCase):
             self.assertEqual(res.records_skipped, 1)  # 1 cached
             self.assertEqual(res.records_written, 1)  # 1 fetched
 
+    def test_collect_abi_includes_observed_transaction_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(Path(tmp))
+            target = "0x" + "33" * 20
+            ctx.transactions_path.parent.mkdir(parents=True, exist_ok=True)
+            ctx.transactions_path.write_text(
+                json.dumps({"to_address": target, "input_data": "0x12345678"})
+                + "\n"
+                + json.dumps({"to_address": "0x" + "44" * 20, "input_data": "0x"})
+                + "\n",
+                encoding="utf-8",
+            )
+            captured_addresses: list[str] = []
+
+            def mock_fetch(addresses, *_args, **_kwargs):
+                captured_addresses.extend(addresses)
+                return []
+
+            with patch("defi_lsa.orchestration.fetch_abi", side_effect=mock_fetch):
+                ctx.collect_abi()
+
+            self.assertCountEqual(
+                captured_addresses,
+                [*ctx.scope.addresses, target],
+            )
+
     def test_collect_prices_defillama_anchor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -606,7 +632,7 @@ class OrchestrationTests(unittest.TestCase):
                  patch.object(CollectionContext, "collect_public_sources", side_effect=track_public):
                 ctx.collect_all()
 
-            expected_order = ["abi", "logs", "transactions", "receipts", "prices", "public_sources"]
+            expected_order = ["logs", "transactions", "abi", "receipts", "prices", "public_sources"]
             self.assertEqual(execution_order, expected_order)
 
     def test_versioned_force_archives_prior_data(self) -> None:

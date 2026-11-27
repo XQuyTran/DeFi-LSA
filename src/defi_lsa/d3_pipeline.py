@@ -358,9 +358,12 @@ def run_d3(
         leg_by_tx=leg_by_tx,
     )
 
+    flow_volume_audit = audit_flow_volume_by_token(flow_legs)
     quality_checks = {
         "decoded_activity_present": bool(decoded_events or decoded_calls),
         "flow_legs_present": bool(flow_legs),
+        "flow_volume_audit_passed": bool(flow_volume_audit)
+        and all(item["passed"] for item in flow_volume_audit),
     }
     report = {
         "status": "GO" if all(quality_checks.values()) else "CONDITIONAL_GO",
@@ -381,7 +384,7 @@ def run_d3(
             label: sum(row["flow_label"] == label for row in flow_legs)
             for label in sorted({row["flow_label"] for row in flow_legs})
         },
-        "flow_volume_audit_by_token": audit_flow_volume_by_token(flow_legs),
+        "flow_volume_audit_by_token": flow_volume_audit,
         "exploit_transaction_count": len(exploit_hashes - {""}),
         "attribution_row_count": len(actor_rows),
         "incident_leg_validation": ownership,

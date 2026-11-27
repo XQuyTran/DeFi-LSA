@@ -22,6 +22,19 @@ def test_classification_preserves_rules_and_prioritizes_exploit():
     assert result["matched_rules"] == ["exploit", "flash_loan", "swap"]
 
 
+def test_transaction_classification_recognizes_borrow_and_repay_events():
+    result = classify_transaction(
+        {"tx_hash": "0xloan"},
+        decoded_events=[
+            {"event_name": "RequestBorrow"},
+            {"event_name": "RequestRepay"},
+        ],
+    )
+
+    assert result["primary_label"] == "borrow"
+    assert result["matched_rules"] == ["borrow", "repay"]
+
+
 def test_roles_are_address_level_and_preserve_source_role():
     assert normalize_actor_role("white-hat") == "whitehat"
     rows = classify_addresses(
@@ -128,11 +141,18 @@ def test_flow_leg_classifies_flash_loan_and_protocol_liquidity_without_user_regi
         decoded_events=[{"event_name": "Deposit", "contract_address": "0xpool"}],
         core_addresses=["0xpool"],
     )
+    repayment = classify_flow_leg(
+        {"tx_hash": "0xrepay", "from_address": "0xuser", "to_address": "0xpool"},
+        decoded_events=[{"event_name": "RequestRepay", "contract_address": "0xpool"}],
+        core_addresses=["0xpool"],
+    )
 
     assert flash_loan["flow_label"] == "flash_loan"
     assert "flash_loan_activity" in flash_loan["matched_rules"]
     assert liquidity["flow_label"] == "user_net_flow"
     assert "user_liquidity_activity" in liquidity["matched_rules"]
+    assert repayment["flow_label"] == "user_net_flow"
+    assert "user_liquidity_activity" in repayment["matched_rules"]
 
 
 def test_unknown_flow_volume_is_reported_per_token():

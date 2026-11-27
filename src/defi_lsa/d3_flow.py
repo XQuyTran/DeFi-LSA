@@ -16,6 +16,8 @@ CLASSIFICATION_PRIORITY = (
     "flash_loan",
     "withdrawal",
     "deposit",
+    "borrow",
+    "repay",
     "swap",
     "unknown",
 )
@@ -93,6 +95,16 @@ def classify_transaction(
         "supply",
     }:
         matched.append("deposit")
+    if event_names & {"borrow", "requestborrow"} or function_names & {
+        "borrow",
+        "requestborrow",
+    }:
+        matched.append("borrow")
+    if event_names & {"repay", "requestrepay"} or function_names & {
+        "repay",
+        "requestrepay",
+    }:
+        matched.append("repay")
     if "swap" in event_names or "swap" in function_names:
         matched.append("swap")
     matched = [label for label in CLASSIFICATION_PRIORITY if label in matched]
@@ -254,8 +266,20 @@ def classify_flow_leg(
     if "mev" in endpoint_roles:
         matched.append("mev_actor_endpoint")
     if (
-        event_names & {"deposit", "supply", "withdraw", "withdrawal", "redeem"}
-        or function_names & {"deposit", "supply", "withdraw", "redeem"}
+        event_names
+        & {
+            "deposit",
+            "supply",
+            "withdraw",
+            "withdrawal",
+            "redeem",
+            "borrow",
+            "repay",
+            "requestborrow",
+            "requestrepay",
+        }
+        or function_names
+        & {"deposit", "supply", "withdraw", "redeem", "borrow", "repay"}
     ) and (
         "user" in endpoint_roles
         or bool(({from_address, to_address} | activity_addresses) & core)

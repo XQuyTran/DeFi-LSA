@@ -71,10 +71,12 @@ def test_d3_marks_empty_analytical_outputs_conditional(tmp_path: Path):
     assert report["quality_checks"] == {
         "decoded_activity_present": False,
         "flow_legs_present": False,
+        "flow_volume_audit_passed": False,
     }
     assert report["corrective_actions"] == [
         "decoded_activity_present",
         "flow_legs_present",
+        "flow_volume_audit_passed",
     ]
 
 
@@ -211,6 +213,7 @@ def test_d3_publishes_canonical_artifacts_from_synthetic_d2_records(tmp_path: Pa
     assert report["scoped_token_transfer_count"] == 1
     assert report["excluded_unrelated_token_transfer_count"] == 1
     assert report["flow_label_counts"] == {"attacker_drain": 1}
+    assert report["quality_checks"]["flow_volume_audit_passed"]
     assert (tmp_path / "data" / "decoded" / "decoded_events.parquet").exists()
     assert (tmp_path / "data" / "decoded" / "decoded_calls.parquet").exists()
     assert (tmp_path / "data" / "decoded" / "flow_legs.parquet").exists()
