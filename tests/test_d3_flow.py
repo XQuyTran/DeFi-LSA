@@ -117,6 +117,24 @@ def test_flow_leg_builder_preserves_wei_and_unknown_class():
     assert rows[0]["flow_leg_id"] == "0xtx:3:0xtoken"
 
 
+def test_flow_leg_classifies_flash_loan_and_protocol_liquidity_without_user_registry():
+    flash_loan = classify_flow_leg(
+        {"tx_hash": "0xflash", "from_address": "0xuser", "to_address": "0xpool"},
+        decoded_events=[{"event_name": "FlashLoan", "contract_address": "0xpool"}],
+        core_addresses=["0xpool"],
+    )
+    liquidity = classify_flow_leg(
+        {"tx_hash": "0xdeposit", "from_address": "0xuser", "to_address": "0xtoken"},
+        decoded_events=[{"event_name": "Deposit", "contract_address": "0xpool"}],
+        core_addresses=["0xpool"],
+    )
+
+    assert flash_loan["flow_label"] == "flash_loan"
+    assert "flash_loan_activity" in flash_loan["matched_rules"]
+    assert liquidity["flow_label"] == "user_net_flow"
+    assert "user_liquidity_activity" in liquidity["matched_rules"]
+
+
 def test_unknown_flow_volume_is_reported_per_token():
     result = audit_flow_volume_by_token(
         [

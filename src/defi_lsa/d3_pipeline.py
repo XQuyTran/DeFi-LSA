@@ -223,21 +223,62 @@ def run_d3(
         if value
     }
     exploit_hashes.update(str(leg.transaction_hash).lower() for leg in incident_legs)
+    protocol_addresses = {
+        str(address).lower()
+        for address in event.get("protocol_or_vulnerable_contracts", [])
+        if address
+    }
+    attack_addresses = {
+        str(address).lower()
+        for address in (
+            list(event.get("attack_contracts", []))
+            + list(event.get("attacker_addresses", []))
+        )
+        if address
+    }
+    core_addresses = protocol_addresses | {
+        str(leg.affected_address).lower()
+        for leg in incident_legs
+        if leg.affected_address
+    }
+    flow_scope_addresses = core_addresses | attack_addresses
     role_by_address = {
-        str(leg.actor_address).lower(): leg.role for leg in incident_legs
+        **{address: "protocol" for address in protocol_addresses},
+        **{address: "attacker" for address in attack_addresses},
+        **{str(leg.actor_address).lower(): leg.role for leg in incident_legs},
     }
     recovery_hashes = {
         str(leg.transaction_hash).lower()
         for leg in incident_legs
         if str(leg.role).strip().lower() in {"recovery", "protocol_recovery"}
     }
+    flow_transaction_hashes = set(exploit_hashes) | recovery_hashes
+    flow_transaction_hashes.update(
+        str(log.get("tx_hash", "")).lower()
+        for log in logs
+        if str(log.get("address", "")).lower() in flow_scope_addresses
+    )
+    flow_transaction_hashes.update(
+        str(row.get("tx_hash", "")).lower()
+        for row in decoded_events + decoded_calls
+    )
+    flow_transaction_hashes.update(
+        str(transaction.get("tx_hash", "")).lower()
+        for transaction in transactions
+        if str(transaction.get("to_address", "")).lower() in flow_scope_addresses
+    )
+    scoped_transfers = [
+        transfer
+        for transfer in transfers
+        if str(transfer.get("tx_hash", "")).lower() in flow_transaction_hashes
+    ]
     flow_legs = build_flow_legs(
-        transfers,
+        scoped_transfers,
         decoded_events_by_tx=decoded_events_by_tx,
         decoded_calls_by_tx=decoded_calls_by_tx,
         exploit_hashes=exploit_hashes,
         recovery_hashes=recovery_hashes,
-        core_addresses=(leg.affected_address for leg in incident_legs),
+        core_addresses=core_addresses,
         role_by_address=role_by_address,
     )
     classifications: list[dict[str, Any]] = []
@@ -311,7 +352,7 @@ def run_d3(
     leg_by_tx = {str(leg["transaction_hash"]).lower(): str(leg["leg_id"]) for leg in resolved_legs}
     actor_by_address = {row["address"]: row["actor_role"] for row in actor_rows}
     balance_rows = build_balance_inputs(
-        transfers,
+        scoped_transfers,
         classification_by_tx=classification_by_tx,
         actor_by_address=actor_by_address,
         leg_by_tx=leg_by_tx,
@@ -333,6 +374,9 @@ def run_d3(
         "decoded_call_count": len(decoded_calls),
         "unknown_event_count": len(unknown_records),
         "flow_leg_count": len(flow_legs),
+        "token_transfer_count": len(transfers),
+        "scoped_token_transfer_count": len(scoped_transfers),
+        "excluded_unrelated_token_transfer_count": len(transfers) - len(scoped_transfers),
         "flow_label_counts": {
             label: sum(row["flow_label"] == label for row in flow_legs)
             for label in sorted({row["flow_label"] for row in flow_legs})

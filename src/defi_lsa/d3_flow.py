@@ -229,6 +229,11 @@ def classify_flow_leg(
     event_names = {str(item.get("event_name", "")).strip().lower() for item in decoded_events}
     function_names = {str(item.get("function_name", "")).strip().lower() for item in decoded_calls}
     endpoint_roles = {roles.get(from_address, "unknown"), roles.get(to_address, "unknown")}
+    activity_addresses = {
+        str(item.get("contract_address", "")).lower()
+        for item in (*decoded_events, *decoded_calls)
+        if item.get("contract_address")
+    }
 
     matched: list[str] = []
     if from_address in core and roles.get(to_address) == "attacker":
@@ -251,7 +256,10 @@ def classify_flow_leg(
     if (
         event_names & {"deposit", "supply", "withdraw", "withdrawal", "redeem"}
         or function_names & {"deposit", "supply", "withdraw", "redeem"}
-    ) and "user" in endpoint_roles and bool({from_address, to_address} & core):
+    ) and (
+        "user" in endpoint_roles
+        or bool(({from_address, to_address} | activity_addresses) & core)
+    ):
         matched.append("user_liquidity_activity")
 
     if "core_to_attacker" in matched or "registered_exploit_to_attacker" in matched:
@@ -260,6 +268,8 @@ def classify_flow_leg(
         label = "recovery_flow"
     elif "core_to_core_transfer" in matched:
         label = "internal_transfer"
+    elif "flash_loan_activity" in matched:
+        label = "flash_loan"
     elif "swap_activity" in matched or "mev_actor_endpoint" in matched:
         label = "swap_mev"
     elif "user_liquidity_activity" in matched:

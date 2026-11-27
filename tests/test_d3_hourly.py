@@ -48,6 +48,7 @@ def test_hourly_panel_distinguishes_empty_complete_from_missing_chain_data():
     assert rows[0]["data_status"] == "COMPLETE"
     assert rows[0]["user_net_flow_token"] == 2.0
     assert rows[0]["user_net_flow_usd"] == 3200.0
+    assert rows[0]["flash_loan_token"] == 0.0
     assert rows[0]["anchor_price_source"] == "defillama"
     assert rows[0]["anchor_price_confidence"] == 0.99
     assert rows[1]["data_status"] == "MISSING_CHAIN_DATA"
@@ -71,6 +72,31 @@ def test_hourly_panel_never_substitutes_zero_for_missing_price():
     assert rows[0]["price_status"] == "MISSING_PRICE"
     assert math.isnan(rows[0]["usd_price_anchor"])
     assert math.isnan(rows[0]["user_net_flow_usd"])
+
+
+def test_hourly_panel_aggregates_flash_loan_flow():
+    token, coverage, legs = _panel_inputs()
+    legs.append(
+        {
+            "token_address": "0xweth",
+            "block_number": 10,
+            "flow_label": "flash_loan",
+            "value_wei": "1000000000000000000",
+        }
+    )
+    rows = build_hourly_panel(
+        "euler",
+        start_utc="2023-03-13T00:00:00Z",
+        hours=1,
+        tokens=[token],
+        hourly_coverage=coverage,
+        flow_legs=legs,
+        block_timestamps={10: 1678667400},
+        anchor_prices={"WETH": 1600},
+    )
+
+    assert rows[0]["flash_loan_token"] == 1.0
+    assert rows[0]["flash_loan_usd"] == 1600.0
 
 
 def test_hourly_schema_rejects_zero_price_and_non_nan_missing_metrics():
