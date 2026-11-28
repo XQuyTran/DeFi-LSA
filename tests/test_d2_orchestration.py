@@ -5,6 +5,7 @@ public sources, all), dry-run planning, checkpoint resumption, versioned force,
 and CLI invocations with deterministic stubs and no live network calls.
 """
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -126,7 +127,7 @@ class OrchestrationTests(unittest.TestCase):
             )
             self.assertEqual(
                 ctx.prices_path,
-                root / "data" / "raw" / "normalized" / "prices" / "coingecko" / "euler_2023-03-13.jsonl",
+                root / "reports" / "euler_2023-03-13" / "price_anchor_report.json",
             )
             self.assertEqual(
                 ctx.discourse_path,
@@ -324,12 +325,89 @@ class OrchestrationTests(unittest.TestCase):
             self.assertEqual(result.records_written, 1)
             self.assertEqual(read_jsonl_records(ctx.transactions_path)[0]["source"], "aws")
             aws_adapter.fetch_table.assert_called_once()
+            self.assertNotIn("addresses", aws_adapter.fetch_table.call_args.kwargs)
             report = json.loads(
                 (ctx.reports_dir / "transactions_aws_rpc_reconciliation.json").read_text(
                     encoding="utf-8"
                 )
             )
             self.assertEqual(report["status"], "match")
+
+    def test_auto_transaction_source_falls_back_from_aws_http_400(self) -> None:
+        tx_hash = "0x47ac3527d02e6b9631c77fad1cdee7bfa77a8a7bfd4880dccbda5146ace4088f"
+        aws_adapter = MagicMock()
+        aws_adapter.fetch_table.side_effect = RuntimeError("HTTP Error 400: Bad Request")
+
+        def rpc_handler(method: str, params: list[Any]) -> Any:
+            if method == "eth_getTransactionByHash":
+                return {
+                    "hash": tx_hash,
+                    "blockNumber": hex(16818024),
+                    "from": "0xb2698c2d99ad2c302a95a8db26b08d17a77cedd4",
+                    "to": "0x27182842e098f60e3d576794a5bffb0777e025d3",
+                    "value": "0x0",
+                    "gas": "0x5208",
+                    "gasPrice": "0x1",
+                    "nonce": "0x0",
+                }
+            raise AssertionError(f"unexpected rpc method {method}")
+
+        config = SourceConfig(
+            ethereum_rpc_url="https://rpc.example.test/token",
+            source_priority={"transactions": ("aws_public_blockchain", "ethereum_rpc")},
+        )
+        discovered = DiscoveredTransactions({(tx_hash, ("registry_anchor",))})
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(Path(tmp), source_config=config)
+            with patch.object(CollectionContext, "aws_adapter", new_callable=PropertyMock) as aws_property, patch.object(
+                CollectionContext, "discover_transactions", return_value=discovered
+            ), patch.object(
+                CollectionContext, "_rpc_caller", return_value=(rpc_handler, MagicMock())
+            ):
+                aws_property.return_value = aws_adapter
+                result = ctx.collect_transactions(source="auto")
+
+            self.assertEqual(result.records_written, 1)
+            self.assertEqual(read_jsonl_records(ctx.transactions_path)[0]["source"], "rpc")
+
+    def test_collect_aws_table_streams_batches_to_normalized_storage(self) -> None:
+        batch = [{
+            "number": 16818024,
+            "timestamp": 1678708800,
+            "gas_used": 100,
+            "hash": "0x" + "a" * 64,
+        }]
+        aws_adapter = MagicMock()
+        aws_adapter.iter_table_batches.return_value = iter([batch])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(Path(tmp))
+            with patch.object(CollectionContext, "aws_adapter", new_callable=PropertyMock) as aws_property:
+                aws_property.return_value = aws_adapter
+                result = ctx.collect_aws_table("blocks")
+
+            records = read_jsonl_records(ctx.blocks_path)
+            self.assertEqual(result.records_written, 1)
+            self.assertEqual(records[0]["source"], "aws")
+            expected_digest = hashlib.sha256(
+                json.dumps(batch, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
+            self.assertEqual(result.source_sha256, expected_digest)
+            aws_adapter.iter_table_batches.assert_called_once()
+
+    def test_token_transfer_collection_includes_registered_token_addresses(self) -> None:
+        aws_adapter = MagicMock()
+        aws_adapter.iter_table_batches.return_value = iter([])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(Path(tmp))
+            with patch.object(CollectionContext, "aws_adapter", new_callable=PropertyMock) as aws_property:
+                aws_property.return_value = aws_adapter
+                ctx.collect_aws_table("token_transfers")
+
+        requested_addresses = aws_adapter.iter_table_batches.call_args.kwargs["addresses"]
+        self.assertIn("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", requested_addresses)
+        self.assertIn("0x6b175474e89094c44da98b954eedeac495271d0f", requested_addresses)
 
     def test_auto_transaction_source_selects_configured_aws(self) -> None:
         config = SourceConfig(
@@ -429,29 +507,68 @@ class OrchestrationTests(unittest.TestCase):
             self.assertEqual(res.records_skipped, 1)  # 1 cached
             self.assertEqual(res.records_written, 1)  # 1 fetched
 
-    def test_collect_prices_coingecko(self) -> None:
+    def test_collect_abi_includes_observed_transaction_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _make_context(Path(tmp))
+            target = "0x" + "33" * 20
+            ctx.transactions_path.parent.mkdir(parents=True, exist_ok=True)
+            ctx.transactions_path.write_text(
+                json.dumps({"to_address": target, "input_data": "0x12345678"})
+                + "\n"
+                + json.dumps({"to_address": "0x" + "44" * 20, "input_data": "0x"})
+                + "\n",
+                encoding="utf-8",
+            )
+            captured_addresses: list[str] = []
+
+            def mock_fetch(addresses, *_args, **_kwargs):
+                captured_addresses.extend(addresses)
+                return []
+
+            with patch("defi_lsa.orchestration.fetch_abi", side_effect=mock_fetch):
+                ctx.collect_abi()
+
+            self.assertCountEqual(
+                captured_addresses,
+                [*ctx.scope.addresses, target],
+            )
+
+    def test_collect_prices_defillama_anchor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
 
-            chart_payload = {
-                "prices": [
-                    [1678697795000, 1650.5],
-                ]
+            addresses = {
+                "weth": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "dai": "0x6b175474e89094c44da98b954eedeac495271d0f",
+                "usdc": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
             }
 
             def mock_opener(req: Any, timeout: float = 30) -> MockHttpResponse:
-                return MockHttpResponse(chart_payload)
+                url = req.full_url
+                address = next(value for value in addresses.values() if value in url)
+                return MockHttpResponse({
+                    "coins": {
+                        f"ethereum:{address}": {
+                            "price": 1.0,
+                            "timestamp": 1678697700,
+                            "confidence": 0.99,
+                        }
+                    }
+                })
 
             ctx = _make_context(root, opener=mock_opener)
             res = ctx.collect_prices()
 
-            self.assertGreater(res.records_written, 0)
+            self.assertEqual(res.records_written, 3)
             self.assertTrue(ctx.prices_path.exists())
+            report = json.loads(ctx.prices_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["anchor_timestamp_utc"], "2023-03-13T08:56:34Z")
+            self.assertEqual(set(report["prices"]), {"WETH", "DAI", "USDC"})
 
-    def test_collect_prices_skips_disabled_coingecko(self) -> None:
+    def test_collect_prices_skips_disabled_defillama(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             opener = MagicMock()
-            config = SourceConfig(enabled_sources={"coingecko": False})
+            config = SourceConfig(enabled_sources={"defillama": False})
             ctx = _make_context(Path(tmp), source_config=config, opener=opener)
 
             result = ctx.collect_prices(source="auto")
@@ -515,7 +632,7 @@ class OrchestrationTests(unittest.TestCase):
                  patch.object(CollectionContext, "collect_public_sources", side_effect=track_public):
                 ctx.collect_all()
 
-            expected_order = ["abi", "logs", "transactions", "receipts", "prices", "public_sources"]
+            expected_order = ["logs", "transactions", "abi", "receipts", "prices", "public_sources"]
             self.assertEqual(execution_order, expected_order)
 
     def test_versioned_force_archives_prior_data(self) -> None:

@@ -50,7 +50,7 @@ _SCHEMA_DEDUP_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 _TOKEN_REQUIRED_FIELDS = frozenset(
-    {"symbol", "chain_id", "address", "decimals", "coingecko_id", "fallback_price_source", "status"}
+    {"symbol", "chain_id", "address", "decimals", "fallback_price_source", "status"}
 )
 
 # ---------------------------------------------------------------------------

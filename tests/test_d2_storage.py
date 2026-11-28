@@ -133,6 +133,20 @@ class AppendNormalizedRecordsTests(unittest.TestCase):
             keys = {json.loads(l)["record_key"] for l in lines}
             self.assertEqual(keys, {"x", "y", "z"})
 
+    def test_append_quarantines_trailing_corruption_without_loading_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "records.jsonl"
+            path.write_bytes(b'{"record_key":"existing"}\n{{corrupt}}\n')
+
+            written, skipped = append_normalized_records(path, [self._make_record("new")])
+
+            self.assertEqual((written, skipped), (1, 0))
+            self.assertEqual(
+                [record["record_key"] for record in read_jsonl_records(path)],
+                ["existing", "new"],
+            )
+            self.assertIn(b"corrupt", path.with_suffix(".quarantine").read_bytes())
+
     def test_creates_parent_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "deep" / "dir" / "records.jsonl"

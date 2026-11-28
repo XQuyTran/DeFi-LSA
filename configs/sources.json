@@ -47,6 +47,10 @@
     "market_chart_range_path": "/coins/{coin_id}/market_chart/range",
     "requests_per_minute_keyless": 10
   },
+  "defillama": {
+    "enabled": true,
+    "base_url": "https://coins.llama.fi/prices"
+  },
   "gdelt": {
     "enabled": true,
     "doc_api_url": "https://api.gdeltproject.org/api/v2/doc/doc",
@@ -67,7 +71,7 @@
     "contracts": ["aws_public_blockchain"],
     "receipts": ["ethereum_rpc", "etherscan"],
     "abi": ["etherscan", "local_cache", "protocol_repository"],
-    "prices": ["chainlink", "onchain_pool", "coingecko"],
+    "prices": ["defillama", "chainlink", "onchain_pool"],
     "public_information": ["official_protocol", "discourse", "gdelt"]
   },
   "collection": {

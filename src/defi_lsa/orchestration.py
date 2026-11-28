@@ -1,18 +1,20 @@
 """Collection context and stage dispatch for executable D2 runs."""
 
+import csv
 import json
 import hashlib
 import shutil
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .checkpoints import Checkpoint, CheckpointStore, compute_scope_hash
 from .aws import (
     AwsPublicBlockchainAdapter,
+    estimate_block_date,
     normalize_aws_block_record,
     normalize_aws_contract_record,
     normalize_aws_log_record,
@@ -47,14 +49,14 @@ from .registry import (
     load_public_source_registry,
     load_token_registry,
 )
-from .retry import RateLimiter, RetryPolicy, execute_with_retry
+from .retry import RateLimiter, RetryPolicy, execute_with_retry, redact_credentials
 from .storage import (
     append_normalized_records,
     normalized_path,
     read_jsonl_records,
     source_path,
 )
-from .adapters.coingecko import CoinGeckoAdapter
+from .adapters.defillama import DefiLlamaAdapter
 from .adapters.discourse import DiscourseAdapter
 from .adapters.gdelt import GDELTAdapter
 from .adapters.protocol import ProtocolAnnouncementAdapter
@@ -62,6 +64,26 @@ from .adapters.protocol import ProtocolAnnouncementAdapter
 
 def _default_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _verified_price_anchor_timestamp(event_id: str) -> str | None:
+    evidence_path = _default_root() / "data" / "evidence" / "events_master_verified.csv"
+    if not evidence_path.exists():
+        return None
+    with evidence_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if row.get("event_id") != event_id:
+                continue
+            raw_timestamp = str(row.get("exploit_timestamp_utc", "")).strip()
+            if not raw_timestamp:
+                return None
+            timestamp = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00"))
+            if timestamp.tzinfo is None or timestamp.utcoffset() != timedelta(0):
+                raise ValueError(f"verified exploit timestamp for {event_id} must be UTC")
+            return (timestamp.astimezone(timezone.utc) - timedelta(seconds=1)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+    return None
 
 
 def _write_coverage_report(report: dict[str, Any], path: Path) -> None:
@@ -100,6 +122,28 @@ class CollectionContext:
     @property
     def end_block(self) -> int:
         return self._effective_block("end_block", self.requested_end_block)
+
+    @property
+    def start_date(self) -> str:
+        date_str = str(
+            self.event.get("collection_start_utc") or self.event.get("event_date_utc") or ""
+        )[:10]
+        if date_str:
+            return date_str
+        return estimate_block_date(self.start_block).isoformat()
+
+    @property
+    def end_date(self) -> str:
+        date_str = str(
+            self.event.get("collection_end_utc") or self.event.get("event_date_utc") or ""
+        )[:10]
+        if date_str:
+            return date_str
+        return estimate_block_date(self.end_block).isoformat()
+
+    @property
+    def collection_assets(self) -> tuple[str, ...]:
+        return tuple(sorted(set(str(asset) for asset in self.event.get("collection_assets", []))))
 
     @property
     def logs_path(self) -> Path:
@@ -144,19 +188,15 @@ class CollectionContext:
 
     @property
     def prices_path(self) -> Path:
-        return (
-            self.output_root
-            / "data"
-            / "raw"
-            / "normalized"
-            / "prices"
-            / "coingecko"
-            / f"{self.event_id}.jsonl"
-        )
+        return self.price_anchor_report_path
 
     @property
     def prices_raw_dir(self) -> Path:
-        return self.output_root / "data" / "raw" / "source" / "coingecko" / self.event_id
+        return self.output_root / "data" / "raw" / "source" / "defillama" / self.event_id
+
+    @property
+    def price_anchor_report_path(self) -> Path:
+        return self.reports_dir / "price_anchor_report.json"
 
     @property
     def discourse_path(self) -> Path:
@@ -251,6 +291,22 @@ class CollectionContext:
             elif sym:
                 clean_tokens.append(sym)
         return tuple(sorted(set(clean_tokens)))
+
+    @property
+    def transfer_scope_addresses(self) -> tuple[str, ...]:
+        addresses = set(self.scope.addresses)
+        tokens_file = _default_root() / "configs" / "tokens.json"
+        if tokens_file.exists():
+            target_symbols = set(self.tokens_related)
+            for token in load_token_registry(tokens_file):
+                address = token.get("address")
+                if (
+                    token.get("symbol") in target_symbols
+                    and token.get("status") == "verified"
+                    and address
+                ):
+                    addresses.add(normalize_address(str(address)))
+        return tuple(sorted(addresses))
 
     def _required_block(self, name: str) -> int:
         value = self.event.get(name)
@@ -384,6 +440,7 @@ class CollectionContext:
             "registry_end_block": self.event.get("end_block"),
             "range_override": self.requested_start_block is not None,
             "scope_addresses": list(self.scope.addresses),
+            "collection_assets": list(self.collection_assets),
             "registered_tx_hashes": list(self.registered_tx_hashes),
             "tokens_related": list(self.tokens_related),
             "paths": {
@@ -544,37 +601,51 @@ class CollectionContext:
         }
         if table not in paths:
             raise ValueError(f"unsupported extended AWS collection table {table!r}")
-        start_date = str(
-            self.event.get("collection_start_utc") or self.event.get("event_date_utc")
-        )[:10]
-        end_date = str(
-            self.event.get("collection_end_utc") or self.event.get("event_date_utc")
-        )[:10]
         self._handle_force(table, [paths[table]])
-        rows = self.aws_adapter.fetch_table(
-            table,
-            start_date=start_date,
-            end_date=end_date,
-            start_block=self.start_block,
-            end_block=self.end_block,
-            addresses=self.scope.addresses,
-        )
-        source_sha = hashlib.sha256(
-            json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
-        ).hexdigest()
-        records = [normalizers[table](row, self.event_id, source_sha) for row in rows]
+        source_digest = hashlib.sha256()
+        source_digest.update(b"[")
+        first_row = True
+
+        def normalized_records() -> Iterable[dict[str, Any]]:
+            nonlocal first_row
+            addresses: tuple[str, ...] = ()
+            if table == "token_transfers":
+                addresses = self.transfer_scope_addresses
+            elif table != "blocks":
+                addresses = self.scope.addresses
+            for rows in self.aws_adapter.iter_table_batches(
+                table,
+                start_date=self.start_date,
+                end_date=self.end_date,
+                start_block=self.start_block,
+                end_block=self.end_block,
+                addresses=addresses,
+            ):
+                batch_payload = json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
+                batch_digest = hashlib.sha256(batch_payload).hexdigest()
+                for row in rows:
+                    if not first_row:
+                        source_digest.update(b", ")
+                    source_digest.update(
+                        json.dumps(row, sort_keys=True, default=str).encode("utf-8")
+                    )
+                    first_row = False
+                    yield normalizers[table](row, self.event_id, batch_digest)
+            source_digest.update(b"]")
+
         written, skipped = append_normalized_records(
-            paths[table], records, key_field="record_key"
+            paths[table], normalized_records(), key_field="record_key"
         )
         return CollectionResult(
             paths[table],
             written,
             skipped,
-            source_sha256=source_sha,
+            source_sha256=source_digest.hexdigest(),
         )
 
     def collect_logs(self, source: str = "rpc") -> CollectionResult:
         """Collect adaptive RPC logs for the frozen event block window."""
+        auto_requested = source == "auto"
         if source == "auto" and "logs" in self.source_config.source_priority:
             available = {"ethereum_rpc"}
             if self.source_config.source_enabled("aws_public_blockchain"):
@@ -582,31 +653,49 @@ class CollectionContext:
             source = self.source_config.select_source("logs", available)
         if source in ("aws", "aws_public_blockchain"):
             self._handle_force("logs", [self.logs_path])
-            rows = self.aws_adapter.fetch_table(
-                "logs",
-                start_block=self.start_block,
-                end_block=self.end_block,
-                addresses=self.scope.addresses,
-            )
-            records = []
-            source_sha = hashlib.sha256(
-                json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
-            ).hexdigest()
-            for row in rows:
-                records.append(normalize_aws_log_record(row, self.event_id, source_sha))
-            written, skipped = append_normalized_records(
-                self.logs_path, records, key_field="record_key"
-            )
-            rpc_records, verification_errors = self._verify_aws_logs(records)
-            self._write_aws_verification_report(
-                "logs", records, rpc_records, "record_key", verification_errors
-            )
-            return CollectionResult(
-                self.logs_path,
-                written,
-                skipped,
-                source_sha256=source_sha,
-            )
+            try:
+                rows = self.aws_adapter.fetch_table(
+                    "logs",
+                    start_date=self.start_date,
+                    end_date=self.end_date,
+                    start_block=self.start_block,
+                    end_block=self.end_block,
+                    addresses=self.scope.addresses,
+                )
+            except Exception as exc:
+                if not auto_requested:
+                    raise
+                print(
+                    json.dumps({
+                        "status": "fallback",
+                        "stage": "logs",
+                        "from_source": "aws_public_blockchain",
+                        "to_source": "ethereum_rpc",
+                        "error_type": type(exc).__name__,
+                        "error": redact_credentials(str(exc)),
+                    }, sort_keys=True)
+                )
+                source = "rpc"
+            else:
+                records = []
+                source_sha = hashlib.sha256(
+                    json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
+                ).hexdigest()
+                for row in rows:
+                    records.append(normalize_aws_log_record(row, self.event_id, source_sha))
+                written, skipped = append_normalized_records(
+                    self.logs_path, records, key_field="record_key"
+                )
+                rpc_records, verification_errors = self._verify_aws_logs(records)
+                self._write_aws_verification_report(
+                    "logs", records, rpc_records, "record_key", verification_errors
+                )
+                return CollectionResult(
+                    self.logs_path,
+                    written,
+                    skipped,
+                    source_sha256=source_sha,
+                )
         if source not in ("rpc", "ethereum_rpc", "auto"):
             raise ValueError(f"logs source {source!r} is not implemented by the logs stage")
 
@@ -642,6 +731,7 @@ class CollectionContext:
 
     def collect_transactions(self, source: str = "rpc") -> CollectionResult:
         """Retrieve and normalize full transactions discovered from logs and registry anchors."""
+        auto_requested = source == "auto"
         if source == "auto" and "transactions" in self.source_config.source_priority:
             available = {"ethereum_rpc"}
             if self.source_config.source_enabled("aws_public_blockchain"):
@@ -657,41 +747,58 @@ class CollectionContext:
 
         if source in ("aws", "aws_public_blockchain"):
             hashes = [item[0] for item in discovered]
-            rows = self.aws_adapter.fetch_table(
-                "transactions",
-                start_block=self.start_block,
-                end_block=self.end_block,
-                transaction_hashes=hashes,
-                addresses=self.scope.addresses,
-            )
-            reasons = {item[0]: item[1] for item in discovered}
-            source_sha = hashlib.sha256(
-                json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
-            ).hexdigest()
-            records = [
-                normalize_aws_transaction_record(
-                    row,
-                    self.event_id,
-                    source_sha,
-                    inclusion_reasons=reasons.get(
-                        str(row.get("hash", "")).lower(), ("direct_call",)
-                    ),
+            try:
+                rows = self.aws_adapter.fetch_table(
+                    "transactions",
+                    start_date=self.start_date,
+                    end_date=self.end_date,
+                    start_block=self.start_block,
+                    end_block=self.end_block,
+                    transaction_hashes=hashes,
                 )
-                for row in rows
-            ]
-            written, skipped = append_normalized_records(
-                self.transactions_path, records, key_field="record_key"
-            )
-            rpc_records, verification_errors = self._verify_aws_transactions(records)
-            self._write_aws_verification_report(
-                "transactions", records, rpc_records, "record_key", verification_errors
-            )
-            return CollectionResult(
-                self.transactions_path,
-                written,
-                skipped,
-                source_sha256=source_sha,
-            )
+            except Exception as exc:
+                if not auto_requested:
+                    raise
+                print(
+                    json.dumps({
+                        "status": "fallback",
+                        "stage": "transactions",
+                        "from_source": "aws_public_blockchain",
+                        "to_source": "ethereum_rpc",
+                        "error_type": type(exc).__name__,
+                        "error": redact_credentials(str(exc)),
+                    }, sort_keys=True)
+                )
+                source = "rpc"
+            else:
+                reasons = {item[0]: item[1] for item in discovered}
+                source_sha = hashlib.sha256(
+                    json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
+                ).hexdigest()
+                records = [
+                    normalize_aws_transaction_record(
+                        row,
+                        self.event_id,
+                        source_sha,
+                        inclusion_reasons=reasons.get(
+                            str(row.get("hash", "")).lower(), ("direct_call",)
+                        ),
+                    )
+                    for row in rows
+                ]
+                written, skipped = append_normalized_records(
+                    self.transactions_path, records, key_field="record_key"
+                )
+                rpc_records, verification_errors = self._verify_aws_transactions(records)
+                self._write_aws_verification_report(
+                    "transactions", records, rpc_records, "record_key", verification_errors
+                )
+                return CollectionResult(
+                    self.transactions_path,
+                    written,
+                    skipped,
+                    source_sha256=source_sha,
+                )
 
         limited_rpc, policy = self._rpc_caller()
         raw_dir = self.raw_source_dir / "transactions" / self.event_id
@@ -728,12 +835,13 @@ class CollectionContext:
         )
 
     def collect_abi(self, source: str = "etherscan") -> CollectionResult:
-        """Acquire verified contract ABIs for scoped addresses (E5 hardened).
+        """Acquire verified ABIs for registry and observed call-target addresses.
 
         Collects ABIs using Etherscan V2 with ``chainid=1``, shared retry and
         throttling policies, immutable raw-response persistence, ABI cache
         validation via checksum, proxy contract resolution, and a local
-        protocol-repository fallback.
+        protocol-repository fallback. Transaction destinations with non-empty
+        calldata are included when normalized transactions are available.
 
         After collection, writes an ABI coverage report to
         ``reports/<event_id>/abi_coverage_report.json`` and updates the
@@ -753,10 +861,18 @@ class CollectionContext:
         # Determine local protocol-repository fallback directory
         protocol_abis_dir = _default_root() / "configs" / "protocol_abis"
 
+        abi_addresses = set(self.scope.addresses)
+        abi_addresses.update(
+            str(record.get("to_address", "")).lower()
+            for record in read_jsonl_records(self.transactions_path)
+            if record.get("to_address")
+            and str(record.get("input_data", "0x")).lower() not in {"", "0x"}
+        )
+
         # Validate existing cache entries via checksum (E5.4)
         cached_count = 0
         missing_addresses = []
-        for address in self.scope.addresses:
+        for address in sorted(abi_addresses):
             abi_path = self.abi_dir / f"{address.lower()}.json"
             meta_path = self.abi_dir / f"{address.lower()}.meta.json"
             if abi_path.exists() and not self.force:
@@ -792,7 +908,7 @@ class CollectionContext:
         if not missing_addresses:
             # All cached and valid — still write coverage report
             coverage = compute_abi_coverage_report(
-                self.scope.addresses, self.abi_dir, event_id=self.event_id
+                abi_addresses, self.abi_dir, event_id=self.event_id
             )
             _write_coverage_report(coverage, self.reports_dir / "abi_coverage_report.json")
             return CollectionResult(self.abi_dir, 0, cached_count)
@@ -831,74 +947,70 @@ class CollectionContext:
 
         # Write ABI coverage report (E5 acceptance criteria)
         coverage = compute_abi_coverage_report(
-            self.scope.addresses, self.abi_dir, event_id=self.event_id
+            abi_addresses, self.abi_dir, event_id=self.event_id
         )
         _write_coverage_report(coverage, self.reports_dir / "abi_coverage_report.json")
 
         return CollectionResult(self.abi_dir, len(written_paths), cached_count)
 
-    def collect_prices(self, source: str = "coingecko") -> CollectionResult:
-        """Collect and normalize hourly token prices from CoinGecko for registered tokens."""
-        if not self.source_config.source_enabled("coingecko"):
+    def collect_prices(self, source: str = "auto") -> CollectionResult:
+        """Collect DefiLlama's fixed pre-incident price anchor for registered tokens."""
+        if not self.source_config.source_enabled("defillama"):
             return CollectionResult(self.prices_path, 0, 0)
-        if source == "auto" and "prices" in self.source_config.source_priority:
-            source = self.source_config.select_source("prices", {"coingecko"})
+        if source == "auto":
+            source = (
+                self.source_config.select_source("prices", {"defillama"})
+                if "prices" in self.source_config.source_priority
+                else "defillama"
+            )
+        if source != "defillama":
+            raise ValueError(f"unsupported fixed-anchor price source: {source}")
 
         self._handle_force("prices", [self.prices_path])
+        anchor_timestamp = _verified_price_anchor_timestamp(self.event_id)
+        if not anchor_timestamp:
+            report = {
+                "event_id": self.event_id,
+                "status": "SKIPPED",
+            "reason": "verified exploit_timestamp_utc is not registered",
+                "fallback_price_timestamp_utc": None,
+            }
+            _write_coverage_report(report, self.price_anchor_report_path)
+            return CollectionResult(self.price_anchor_report_path, 0, 1)
+
         tokens_file = _default_root() / "configs" / "tokens.json"
         if not tokens_file.exists():
-            return CollectionResult(self.prices_path, 0, 0)
+            return CollectionResult(self.price_anchor_report_path, 0, 0)
 
         tokens = load_token_registry(tokens_file)
-        start_dt = (
-            self.event.get("collection_start_utc")
-            or f"{self.event.get('event_date_utc', '2023-01-01')}T00:00:00Z"
-        )
-        end_dt = (
-            self.event.get("collection_end_utc")
-            or f"{self.event.get('event_date_utc', '2023-01-01')}T23:59:59Z"
-        )
-
         policy = RetryPolicy(max_attempts=self.source_config.maximum_attempts)
         limiter = RateLimiter(requests_per_second=self.source_config.requests_per_second)
-        adapter = CoinGeckoAdapter(
-            api_key=self.source_config.coingecko_api_key,
-            api_base_url=self.source_config.coingecko_api_url,
+        adapter = DefiLlamaAdapter(
+            api_base_url=self.source_config.defillama_api_url,
             retry_policy=policy,
             rate_limiter=limiter,
             opener=self.opener,
         )
-
-        total_written = 0
-        total_skipped = 0
         target_symbols = set(self.tokens_related)
-
-        for token in tokens:
-            symbol = token.get("symbol", "")
-            if target_symbols and symbol not in target_symbols:
-                continue
-            if token.get("status") != "verified" or not token.get("address"):
-                continue
-
-            address = token["address"]
-            coin_id = token.get("coingecko_id")
-            if not coin_id:
-                continue
-
-            report_file = self.reports_dir / f"price_coverage_{symbol.lower()}.json"
-            records = adapter.collect_hourly_prices(
-                token_address=address,
-                coin_id=coin_id,
-                event_id=self.event_id,
-                start_dt=start_dt,
-                end_dt=end_dt,
-                output_dir=self.output_root,
-                raw_dir=self.output_root,
-                coverage_report_path=report_file,
-            )
-            total_written += len(records)
-
-        return CollectionResult(self.prices_path, total_written, total_skipped)
+        target_tokens = [
+            token
+            for token in tokens
+            if (not target_symbols or token.get("symbol") in target_symbols)
+            and token.get("status") == "verified"
+            and token.get("address")
+        ]
+        result = adapter.fetch_anchor_prices(
+            event_id=self.event_id,
+            tokens=target_tokens,
+            anchor_timestamp=str(anchor_timestamp),
+            output_root=self.output_root,
+            report_path=self.price_anchor_report_path,
+        )
+        return CollectionResult(
+            self.price_anchor_report_path,
+            len(result["records"]),
+            len(result["missing_tokens"]),
+        )
 
     def collect_public_sources(self, source: str = "auto") -> dict[str, CollectionResult]:
         """Collect forum announcements, protocol feeds, and GDELT metadata."""
@@ -986,16 +1098,15 @@ class CollectionContext:
     def collect_all(self, source: str = "auto") -> dict[str, Any]:
         """Execute all collection stages in strict dependency order.
 
-        Order: abi -> logs -> transactions -> receipts -> prices -> public_sources.
+        Order: logs -> transactions -> abi -> receipts -> prices -> public_sources.
         """
         results: dict[str, Any] = {}
-        # 1. ABI
-        results["abi"] = self.collect_abi(source="auto" if source == "auto" else source)
-        # 2. Logs
+        # Logs discover the transaction hashes whose destinations need ABIs.
         results["logs"] = self.collect_logs(source="auto" if source == "auto" else source)
-        # 3. Transactions
         results["transactions"] = self.collect_transactions(source="auto" if source == "auto" else source)
-        # 4. Receipts
+        # Fetch registry and observed-call-target ABIs after transactions exist.
+        results["abi"] = self.collect_abi(source="auto" if source == "auto" else source)
+        # Receipts
         results["receipts"] = self.collect_receipts(source="auto" if source == "auto" else source)
         extended_tables = ("blocks", "token_transfers", "traces", "contracts")
         should_collect_extended = source in ("aws", "aws_public_blockchain") or (
@@ -1005,8 +1116,8 @@ class CollectionContext:
         if should_collect_extended:
             for table in extended_tables:
                 results[table] = self.collect_aws_table(table, source="aws")
-        # 5. Prices
-        results["prices"] = self.collect_prices(source="auto" if source == "auto" else source)
-        # 6. Public Sources
+        # Prices
+        results["prices"] = self.collect_prices(source="auto")
+        # Public sources
         results["public_sources"] = self.collect_public_sources(source="auto" if source == "auto" else source)
         return results

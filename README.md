@@ -26,11 +26,24 @@ Use separate output roots for one-block, 100-block, and registry-driven full
 runs. A valid restored root containing `data`, `checkpoints`, or `reports` is
 reused; collection preflight also checks free disk space and writability.
 
-The Kaggle notebook in `src/DeFi_LSA_D2_Kaggle_Collection.ipynb` loads
-credentials from Kaggle Secrets, installs the package, performs runtime and
-source checks, runs isolated Euler/Kyber smoke roots, and leaves full runs
-disabled until strict smoke audits pass. Credentials are never written to the
-runtime configuration or reports.
+The Kaggle notebook in `src/DeFi_LSA.ipynb` loads credentials from Kaggle
+Secrets, installs the package, performs runtime and source checks, runs isolated
+Euler/Kyber smoke roots, and gates full runs on strict smoke audit results.
+Credentials are never written to the runtime configuration or reports.
+
+## E0 scope freeze and E1 Euler window
+
+The Euler primary case is frozen in `configs/events.json` and
+`data/raw/event_candidates.csv` for block 16,773,224 through 16,845,224
+(March 6 to March 16, 2023). Block 16,818,024 remains the exploit block.
+E0 evidence, exclusion rationale, research scope, and alert benchmarks are in
+`data/evidence/events_master_verified.csv`, `docs/event_exclusion_log.md`,
+`docs/research_scope_v1.md`, and `configs/alert_benchmarks.json`.
+
+The E1 collection plan exposes the affected Euler asset set (WETH, DAI, USDC,
+WBTC, and wstETH) in the dry-run metadata. Local full collection should use the
+registry-driven block window; smoke commands may use explicit paired overrides,
+and the notebook keeps each smoke run in an isolated output root.
 
 ## Data-readiness pipeline
 

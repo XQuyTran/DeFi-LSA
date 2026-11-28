@@ -591,6 +591,32 @@ class TestABICoverageReport(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestFetchABIBackwardCompatibility(unittest.TestCase):
+    def test_unavailable_address_does_not_prevent_later_abi_fetch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            abi_dir = Path(tmp) / "abi"
+            abi_dir.mkdir()
+
+            def opener(req: Any, timeout: float = 30.0) -> Any:
+                url = req.full_url if hasattr(req, "full_url") else str(req)
+                if f"address={ADDR_A}" in url:
+                    return _Resp(_etherscan_err_response())
+                return _Resp(_etherscan_ok_response())
+
+            paths = fetch_abi(
+                [ADDR_A, ADDR_B],
+                API_BASE,
+                API_KEY,
+                abi_dir,
+                opener=opener,
+                resolve_proxies=False,
+                retry_policy=RetryPolicy(max_attempts=1),
+            )
+
+            self.assertEqual(paths, [abi_dir / f"{ADDR_B}.json"])
+            report = compute_abi_coverage_report([ADDR_A, ADDR_B], abi_dir)
+            self.assertEqual(report["verified_addresses"], [ADDR_B])
+            self.assertEqual(report["missing_addresses"], [ADDR_A])
+
     def test_fetch_abi_with_http_get_kwarg(self) -> None:
         """Existing callers using http_get= must still work."""
         with tempfile.TemporaryDirectory() as tmp:

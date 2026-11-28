@@ -1,6 +1,9 @@
 from defi_lsa.d3_flow import (
+    audit_flow_volume_by_token,
     build_balance_inputs,
+    build_flow_legs,
     classify_addresses,
+    classify_flow_leg,
     classify_transaction,
     normalize_actor_role,
     validate_incident_leg_ownership,
@@ -17,6 +20,19 @@ def test_classification_preserves_rules_and_prioritizes_exploit():
 
     assert result["primary_label"] == "exploit"
     assert result["matched_rules"] == ["exploit", "flash_loan", "swap"]
+
+
+def test_transaction_classification_recognizes_borrow_and_repay_events():
+    result = classify_transaction(
+        {"tx_hash": "0xloan"},
+        decoded_events=[
+            {"event_name": "RequestBorrow"},
+            {"event_name": "RequestRepay"},
+        ],
+    )
+
+    assert result["primary_label"] == "borrow"
+    assert result["matched_rules"] == ["borrow", "repay"]
 
 
 def test_roles_are_address_level_and_preserve_source_role():
@@ -72,3 +88,82 @@ def test_balance_inputs_are_not_hourly_aggregated():
     assert rows[0]["balance_delta"] == "10"
     assert rows[0]["incident_leg_id"] == "leg-1"
     assert "hour" not in rows[0]
+
+
+def test_flow_leg_rules_prioritize_registered_drain_and_keep_evidence():
+    result = classify_flow_leg(
+        {
+            "tx_hash": "0xdrain",
+            "from_address": "0xpool",
+            "to_address": "0xattacker",
+        },
+        decoded_events=[{"event_name": "Swap"}],
+        exploit_hashes=["0xdrain"],
+        core_addresses=["0xpool"],
+        role_by_address={"0xattacker": "primary_exploiter"},
+    )
+
+    assert result["flow_label"] == "attacker_drain"
+    assert "core_to_attacker" in result["matched_rules"]
+    assert result["evidence"]["registered_exploit"]
+
+
+def test_flow_leg_builder_preserves_wei_and_unknown_class():
+    rows = build_flow_legs(
+        [
+            {
+                "event_id": "evt",
+                "chain_id": 1,
+                "tx_hash": "0xTx",
+                "block_number": 12,
+                "log_index": 3,
+                "token_address": "0xToken",
+                "from_address": "0xA",
+                "to_address": "0xB",
+                "value_wei": 12345678901234567890,
+            }
+        ]
+    )
+
+    assert rows[0]["flow_label"] == "unknown"
+    assert rows[0]["value_wei"] == "12345678901234567890"
+    assert rows[0]["flow_leg_id"] == "0xtx:3:0xtoken"
+
+
+def test_flow_leg_classifies_flash_loan_and_protocol_liquidity_without_user_registry():
+    flash_loan = classify_flow_leg(
+        {"tx_hash": "0xflash", "from_address": "0xuser", "to_address": "0xpool"},
+        decoded_events=[{"event_name": "FlashLoan", "contract_address": "0xpool"}],
+        core_addresses=["0xpool"],
+    )
+    liquidity = classify_flow_leg(
+        {"tx_hash": "0xdeposit", "from_address": "0xuser", "to_address": "0xtoken"},
+        decoded_events=[{"event_name": "Deposit", "contract_address": "0xpool"}],
+        core_addresses=["0xpool"],
+    )
+    repayment = classify_flow_leg(
+        {"tx_hash": "0xrepay", "from_address": "0xuser", "to_address": "0xpool"},
+        decoded_events=[{"event_name": "RequestRepay", "contract_address": "0xpool"}],
+        core_addresses=["0xpool"],
+    )
+
+    assert flash_loan["flow_label"] == "flash_loan"
+    assert "flash_loan_activity" in flash_loan["matched_rules"]
+    assert liquidity["flow_label"] == "user_net_flow"
+    assert "user_liquidity_activity" in liquidity["matched_rules"]
+    assert repayment["flow_label"] == "user_net_flow"
+    assert "user_liquidity_activity" in repayment["matched_rules"]
+
+
+def test_unknown_flow_volume_is_reported_per_token():
+    result = audit_flow_volume_by_token(
+        [
+            {"token_address": "0xaaa", "value_wei": "100", "flow_label": "unknown"},
+            {"token_address": "0xaaa", "value_wei": "900", "flow_label": "swap_mev"},
+            {"token_address": "0xbbb", "value_wei": "1000000000000000000", "flow_label": "unknown"},
+        ]
+    )
+
+    assert result[0]["unknown_flow_share"] == 0.1
+    assert not result[0]["passed"]
+    assert result[1]["unknown_flow_share"] == 1.0

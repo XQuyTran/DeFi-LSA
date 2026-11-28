@@ -4,6 +4,7 @@
 
 import argparse
 import json
+import traceback
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -68,6 +69,10 @@ def _registry_command(args: argparse.Namespace) -> int:
         + "\n",
         encoding="utf-8",
     )
+    evidence_paths = [
+        args.alert_benchmarks,
+        args.events_master,
+    ]
     write_registry_manifest(
         args.manifest_output,
         [
@@ -77,6 +82,7 @@ def _registry_command(args: argparse.Namespace) -> int:
             *([args.incident_legs] if args.incident_legs.exists() else []),
             args.tokens,
             args.public_sources,
+            *[path for path in evidence_paths if path.exists()],
         ],
     )
     print(f"Validated {len(candidates)} event candidates")
@@ -233,10 +239,15 @@ def _collect_command(args: argparse.Namespace) -> int:
         summary_event = context.event_id if context is not None else args.event
         summary = output_root / summary_event / f"{metrics.run_id}.json"
         metrics.write_summary(summary)
+        traceback_tail = "\n".join(traceback.format_exc().splitlines()[-12:])
         print(json.dumps({
             "run_id": metrics.run_id,
             "status": "failed",
+            "stage": args.stage,
+            "source": args.source,
+            "error_type": type(exc).__name__,
             "error": redact_credentials(str(exc)),
+            "traceback_tail": redact_credentials(traceback_tail),
         }, sort_keys=True))
         return 1
 
@@ -321,7 +332,7 @@ def _audit_command(args: argparse.Namespace) -> int:
     transactions_jsonl = normalized / "transactions" / event_id
     receipts_jsonl = normalized / "receipts" / event_id
     abi_dir = run_root / "data" / "raw" / "source" / "abi" / event_id
-    prices_jsonl = normalized / "prices" / "coingecko" / event_id
+    prices_jsonl = normalized / "prices" / "defillama_anchor" / event_id
     reports_dir = run_root / "reports" / event_id
     manifest_path = reports_dir / "source_manifest.json"
 
@@ -409,7 +420,7 @@ def _audit_command(args: argparse.Namespace) -> int:
         "transactions": normalized / "transactions" / event_id,
         "receipts": normalized / "receipts" / event_id,
         "blocks": normalized / "blocks" / event_id,
-        "prices": normalized / "prices" / "coingecko" / event_id,
+        "prices": normalized / "prices" / "defillama_anchor" / event_id,
     }
     for schema, p in duplicate_paths.items():
         dup = audit_duplicate_records(p, schema)
@@ -499,6 +510,16 @@ def build_parser() -> argparse.ArgumentParser:
     registry.add_argument(
         "--public-sources", type=Path, default=root / "configs" / "public_sources.json"
     )
+    registry.add_argument(
+        "--alert-benchmarks",
+        type=Path,
+        default=root / "configs" / "alert_benchmarks.json",
+    )
+    registry.add_argument(
+        "--events-master",
+        type=Path,
+        default=root / "data" / "evidence" / "events_master_verified.csv",
+    )
     registry.set_defaults(handler=_registry_command)
 
     build = subparsers.add_parser("build", help="run an event build")
@@ -528,7 +549,7 @@ def build_parser() -> argparse.ArgumentParser:
     connectivity.add_argument("--event")
     connectivity.add_argument(
         "--source",
-        choices=("rpc", "etherscan", "coingecko", "gdelt", "aws", "forums", "auto"),
+        choices=("rpc", "etherscan", "defillama", "gdelt", "aws", "forums", "auto"),
         default="rpc",
     )
     connectivity.add_argument("--config", type=Path)
@@ -540,7 +561,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument(
         "--source",
         default="rpc",
-        choices=("rpc", "etherscan", "coingecko", "gdelt", "forums", "aws", "auto"),
+        choices=("rpc", "etherscan", "defillama", "gdelt", "forums", "aws", "auto"),
     )
     collect.add_argument(
         "--stage",

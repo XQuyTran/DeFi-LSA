@@ -18,10 +18,12 @@ _PRIORITY_SOURCE_NAMES = {
     "chainlink",
     "onchain_pool",
     "coingecko",
+    "defillama",
     "official_protocol",
     "discourse",
     "gdelt",
 }
+DEFAULT_DEFILLAMA_API_URL = "https://coins.llama.fi/prices"
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,7 @@ class SourceConfig:
     coingecko_api_url: str = "https://api.coingecko.com/api/v3"
     coingecko_api_key: str = field(default="", repr=False, compare=False)
     coingecko_api_key_header: str = "x-cg-demo-api-key"
+    defillama_api_url: str = "https://coins.llama.fi/prices"
     gdelt_doc_api_url: str = "https://api.gdeltproject.org/api/v2/doc/doc"
     forums: Mapping[str, Any] = field(default_factory=dict)
     aws_public_blockchain: Mapping[str, Any] = field(default_factory=dict)
@@ -89,6 +92,8 @@ class SourceConfig:
             raise ValueError("etherscan_api_url must be an HTTP(S) URL")
         if self.coingecko_api_url and not self.coingecko_api_url.startswith(("http://", "https://")):
             raise ValueError("coingecko_api_url must be an HTTP(S) URL")
+        if self.defillama_api_url and not self.defillama_api_url.startswith(("http://", "https://")):
+            raise ValueError("defillama_api_url must be an HTTP(S) URL")
         if self.gdelt_enabled and not self.gdelt_doc_api_url.startswith(("http://", "https://")):
             raise ValueError("gdelt_doc_api_url must be an HTTP(S) URL")
         self._validate_nested_sources()
@@ -166,6 +171,7 @@ def load_source_config(path: Path | None = None) -> SourceConfig:
         "ethereum",
         "etherscan",
         "coingecko",
+        "defillama",
         "gdelt",
         "forums",
         "aws_public_blockchain",
@@ -180,6 +186,7 @@ def load_source_config(path: Path | None = None) -> SourceConfig:
         raise ValueError("source configuration section 'ethereum.rpc' must be an object")
     etherscan = values.get("etherscan", {})
     coingecko = values.get("coingecko", {})
+    defillama = values.get("defillama", {})
     gdelt = values.get("gdelt", {})
     collection = values.get("collection", {})
 
@@ -204,29 +211,65 @@ def load_source_config(path: Path | None = None) -> SourceConfig:
     flattened["coingecko_api_key_header"] = coingecko.get(
         "api_key_header", "x-cg-demo-api-key"
     )
+    flattened["defillama_api_url"] = defillama.get(
+        "base_url", DEFAULT_DEFILLAMA_API_URL
+    )
     flattened["gdelt_doc_api_url"] = gdelt.get(
         "doc_api_url", SourceConfig.gdelt_doc_api_url
     )
     flattened["gdelt_enabled"] = gdelt.get("enabled", values.get("gdelt_enabled", True))
     flattened["output_root"] = collection.get("output_root", values.get("output_root", ""))
+    aws_public_blockchain = values.get("aws_public_blockchain", {})
+    if not isinstance(aws_public_blockchain, Mapping) or not aws_public_blockchain:
+        aws_public_blockchain = {
+            "enabled": True,
+            "region": "us-east-2",
+            "bucket": "aws-public-blockchain",
+            "ethereum_root": "s3://aws-public-blockchain/v1.0/eth/",
+            "anonymous": True,
+            "tables": {
+                "blocks": "blocks/date={YYYY-MM-DD}/",
+                "transactions": "transactions/date={YYYY-MM-DD}/",
+                "logs": "logs/date={YYYY-MM-DD}/",
+                "token_transfers": "token_transfers/date={YYYY-MM-DD}/",
+                "traces": "traces/date={YYYY-MM-DD}/",
+                "contracts": "contracts/date={YYYY-MM-DD}/",
+            },
+        }
+
+    source_priority = values.get("source_priority", {})
+    if not isinstance(source_priority, Mapping) or not source_priority:
+        source_priority = {
+            "blocks": ("aws_public_blockchain", "ethereum_rpc"),
+            "transactions": ("aws_public_blockchain", "ethereum_rpc"),
+            "logs": ("aws_public_blockchain", "ethereum_rpc"),
+            "token_transfers": ("aws_public_blockchain",),
+            "traces": ("aws_public_blockchain",),
+            "contracts": ("aws_public_blockchain",),
+            "receipts": ("ethereum_rpc", "etherscan"),
+            "abi": ("etherscan", "local_cache", "protocol_repository"),
+            "prices": ("defillama", "chainlink", "onchain_pool"),
+            "public_information": ("official_protocol", "discourse", "gdelt"),
+        }
+
     flattened.update(
         {
             "forums": values.get("forums", {}),
-            "aws_public_blockchain": values.get("aws_public_blockchain", {}),
+            "aws_public_blockchain": aws_public_blockchain,
             "enabled_sources": {
                 "ethereum_rpc": bool(ethereum.get("enabled", True)),
                 "etherscan": bool(etherscan.get("enabled", True)),
                 "coingecko": bool(coingecko.get("enabled", True)),
+                "defillama": bool(defillama.get("enabled", True)),
                 "gdelt": bool(gdelt.get("enabled", True)),
-                "aws_public_blockchain": bool(
-                    values.get("aws_public_blockchain", {}).get("enabled", True)
-                ),
+                "aws_public_blockchain": bool(aws_public_blockchain.get("enabled", True)),
                 "forums": bool(values.get("forums", {}).get("enabled", True)),
             },
             "source_priority": {},
         }
     )
-    for key, value in values.get("source_priority", {}).items():
+    source_priority_values = source_priority if isinstance(source_priority, Mapping) else {}
+    for key, value in source_priority_values.items():
         if not isinstance(value, (list, tuple)):
             raise ValueError(f"source priority for {key} must be an array")
         flattened["source_priority"][key] = tuple(value)

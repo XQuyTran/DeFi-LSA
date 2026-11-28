@@ -42,10 +42,11 @@ class RegistryTests(unittest.TestCase):
 
     def test_event_model_preserves_optional_collection_fields(self) -> None:
         candidate = load_event_candidates(CSV_PATH)[0]
-        self.assertEqual(candidate.collection_start_utc, "2023-03-13T08:56:35Z")
-        self.assertEqual(candidate.collection_end_utc, "2023-03-13T08:56:35Z")
-        self.assertEqual(candidate.start_block, 16818024)
-        self.assertEqual(candidate.end_block, 16818024)
+        self.assertEqual(candidate.collection_start_utc, "2023-03-06T08:56:35Z")
+        self.assertEqual(candidate.collection_end_utc, "2023-03-16T08:56:35Z")
+        self.assertEqual(candidate.start_block, 16773224)
+        self.assertEqual(candidate.end_block, 16845224)
+        self.assertEqual(candidate.block_number, 16818024)
 
     def test_metadata_registries_are_valid(self) -> None:
         self.assertGreater(len(load_token_registry(ROOT / "configs" / "tokens.json")), 0)

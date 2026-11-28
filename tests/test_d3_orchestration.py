@@ -48,6 +48,38 @@ def test_d3_does_not_run_on_d2_no_go(tmp_path: Path):
         run_d3("evt", output_root=tmp_path, events_path=events, incident_legs_path=legs)
 
 
+def test_d3_marks_empty_analytical_outputs_conditional(tmp_path: Path):
+    event_id = "evt"
+    report_dir = tmp_path / "reports" / event_id
+    report_dir.mkdir(parents=True)
+    (report_dir / "d2_collection_audit.json").write_text(
+        json.dumps({"status": "CONDITIONAL_GO"}), encoding="utf-8"
+    )
+    events = tmp_path / "events.json"
+    events.write_text(json.dumps([{"event_id": event_id}]))
+    legs = tmp_path / "legs.json"
+    legs.write_text("[]", encoding="utf-8")
+
+    report = run_d3(
+        event_id,
+        output_root=tmp_path,
+        events_path=events,
+        incident_legs_path=legs,
+    )
+
+    assert report["status"] == "CONDITIONAL_GO"
+    assert report["quality_checks"] == {
+        "decoded_activity_present": False,
+        "flow_legs_present": False,
+        "flow_volume_audit_passed": False,
+    }
+    assert report["corrective_actions"] == [
+        "decoded_activity_present",
+        "flow_legs_present",
+        "flow_volume_audit_passed",
+    ]
+
+
 def test_d3_publishes_canonical_artifacts_from_synthetic_d2_records(tmp_path: Path):
     event_id = "evt"
     contract = "0x" + "aa" * 20
@@ -131,6 +163,20 @@ def test_d3_publishes_canonical_artifacts_from_synthetic_d2_records(tmp_path: Pa
                 "value_wei": 10,
             }
         )
+        + "\n"
+        + json.dumps(
+            {
+                "event_id": event_id,
+                "chain_id": 1,
+                "tx_hash": "0x" + "cc" * 32,
+                "block_number": 1,
+                "log_index": 1,
+                "token_address": contract,
+                "from_address": sender,
+                "to_address": recipient,
+                "value_wei": 20,
+            }
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -140,7 +186,18 @@ def test_d3_publishes_canonical_artifacts_from_synthetic_d2_records(tmp_path: Pa
         json.dumps({"status": "GO"}), encoding="utf-8"
     )
     events = tmp_path / "events.json"
-    events.write_text(json.dumps([{"event_id": event_id}]), encoding="utf-8")
+    events.write_text(
+        json.dumps(
+            [
+                {
+                    "event_id": event_id,
+                    "protocol_or_vulnerable_contracts": [sender],
+                    "attacker_addresses": [recipient],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
     legs = tmp_path / "legs.json"
     legs.write_text("[]", encoding="utf-8")
 
@@ -152,7 +209,13 @@ def test_d3_publishes_canonical_artifacts_from_synthetic_d2_records(tmp_path: Pa
     )
 
     assert report["status"] == "GO"
+    assert report["token_transfer_count"] == 2
+    assert report["scoped_token_transfer_count"] == 1
+    assert report["excluded_unrelated_token_transfer_count"] == 1
+    assert report["flow_label_counts"] == {"attacker_drain": 1}
+    assert report["quality_checks"]["flow_volume_audit_passed"]
     assert (tmp_path / "data" / "decoded" / "decoded_events.parquet").exists()
     assert (tmp_path / "data" / "decoded" / "decoded_calls.parquet").exists()
+    assert (tmp_path / "data" / "decoded" / "flow_legs.parquet").exists()
     assert (report_dir / "unknown_event_report.json").exists()
     assert (report_dir / "d3_gate_report.json").exists()

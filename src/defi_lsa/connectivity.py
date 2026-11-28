@@ -208,6 +208,36 @@ def _probe_coingecko(
     _json_body("coingecko", body)
 
 
+def _probe_defillama(
+    config: SourceConfig,
+    opener: Callable[..., Any],
+    sleep_fn: Callable[[float], None],
+) -> None:
+    address = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+    url = f"{config.defillama_api_url.rstrip('/')}/current/ethereum:{address}"
+    body = _read_http(
+        "defillama",
+        url,
+        opener=opener,
+        timeout=config.request_timeout_seconds,
+        maximum_attempts=config.maximum_attempts,
+        requests_per_second=config.requests_per_second,
+        sleep_fn=sleep_fn,
+    )
+    parsed = _json_body("defillama", body)
+    coin = parsed.get("coins", {}).get(f"ethereum:{address}")
+    try:
+        price = float(coin["price"])
+    except (TypeError, KeyError, ValueError) as exc:
+        raise InvalidRequestError(
+            "DefiLlama response did not contain a token price", source="defillama"
+        ) from exc
+    if price <= 0:
+        raise InvalidRequestError(
+            "DefiLlama returned a non-positive token price", source="defillama"
+        )
+
+
 def _probe_gdelt(
     config: SourceConfig,
     opener: Callable[..., Any],
@@ -273,6 +303,7 @@ _PROBES: dict[str, Callable[[SourceConfig, Callable[..., Any], Callable[[float],
     "rpc": _probe_rpc,
     "etherscan": _probe_etherscan,
     "coingecko": _probe_coingecko,
+    "defillama": _probe_defillama,
     "gdelt": _probe_gdelt,
     "aws": _probe_aws,
     "forums": _probe_forums,

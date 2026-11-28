@@ -69,6 +69,18 @@ AWS_TABLE_CONTRACTS: dict[str, AwsTableContract] = {
 }
 
 
+def estimate_block_date(block_number: int) -> date:
+    """Estimate the UTC calendar date for an Ethereum mainnet block number."""
+    if block_number >= 15537393:
+        # Post-merge (block 15537393 on 2022-09-15 06:42:42 UTC, timestamp 1663224162)
+        # Average slot time is 12.06s in practice due to occasional missed slots
+        ts = 1663224162 + int((block_number - 15537393) * 12.06)
+    else:
+        # Pre-merge average block time was ~13.3 seconds
+        ts = 1438269988 + int((block_number / 15537393) * (1663224162 - 1438269988))
+    return datetime.fromtimestamp(ts, tz=timezone.utc).date()
+
+
 class AwsPublicBlockchainAdapter:
     """Read AWS Ethereum Parquet data with an injectable offline query seam."""
 
@@ -98,14 +110,16 @@ class AwsPublicBlockchainAdapter:
         ]
 
     def fetch_aws_blocks(self, start_block: int, end_block: int) -> list[dict[str, Any]]:
-        return self._fetch("blocks", start_block=start_block, end_block=end_block)
+        return self.fetch_table("blocks", start_block=start_block, end_block=end_block)
 
     def fetch_aws_transactions(self, start_block: int, end_block: int) -> list[dict[str, Any]]:
-        return self._fetch("transactions", start_block=start_block, end_block=end_block)
+        return self.fetch_table("transactions", start_block=start_block, end_block=end_block)
 
     def fetch_aws_logs(self, start_block: int, end_block: int, addresses: Iterable[str] = ()) -> list[dict[str, Any]]:
         scope_addresses = list(addresses)
-        rows = self._fetch("logs", start_block=start_block, end_block=end_block, addresses=scope_addresses)
+        rows = self.fetch_table(
+            "logs", start_block=start_block, end_block=end_block, addresses=scope_addresses
+        )
         return filter_aws_records_by_scope(rows, scope_addresses) if scope_addresses else list(rows)
 
     def fetch_table(
@@ -120,7 +134,33 @@ class AwsPublicBlockchainAdapter:
         addresses: Iterable[str] = (),
     ) -> list[dict[str, Any]]:
         """Read a table and apply supported filters before returning records."""
-        return self._fetch(
+        return [
+            row
+            for batch in self.iter_table_batches(
+                table,
+                start_date=start_date,
+                end_date=end_date,
+                start_block=start_block,
+                end_block=end_block,
+                transaction_hashes=transaction_hashes,
+                addresses=addresses,
+            )
+            for row in batch
+        ]
+
+    def iter_table_batches(
+        self,
+        table: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        start_block: int | None = None,
+        end_block: int | None = None,
+        transaction_hashes: Iterable[str] = (),
+        addresses: Iterable[str] = (),
+    ) -> Iterable[list[dict[str, Any]]]:
+        """Yield filtered table rows in bounded batches."""
+        yield from self._fetch(
             table,
             start_date=start_date,
             end_date=end_date,
@@ -130,16 +170,29 @@ class AwsPublicBlockchainAdapter:
             addresses=list(addresses),
         )
 
-    def _fetch(self, table: str, **filters: Any) -> list[dict[str, Any]]:
+    def _fetch(self, table: str, **filters: Any) -> Iterable[list[dict[str, Any]]]:
         if table not in AWS_TABLE_CONTRACTS:
             raise ValueError(f"unsupported AWS table {table!r}")
         if self.query is not None:
             query_filters = {key: value for key, value in filters.items() if value is not None}
-            return list(self.query(table, query_filters))
+            rows = list(self.query(table, query_filters))
+            if rows:
+                yield rows
+            return
         if self.filesystem is None:
             self.filesystem = _anonymous_filesystem(self.region)
         contract = AWS_TABLE_CONTRACTS[table]
-        paths = self._partition_paths(table, filters.get("start_date"), filters.get("end_date"))
+        start_date = filters.get("start_date")
+        end_date = filters.get("end_date")
+        if start_date is None and end_date is None:
+            start_block = filters.get("start_block")
+            end_block = filters.get("end_block")
+            if start_block is not None or end_block is not None:
+                sb = start_block if start_block is not None else end_block
+                eb = end_block if end_block is not None else start_block
+                start_date = (estimate_block_date(sb) - timedelta(days=1)).isoformat()
+                end_date = (estimate_block_date(eb) + timedelta(days=1)).isoformat()
+        paths = self._partition_paths(table, start_date, end_date)
         if not paths:
             return []
         try:
@@ -151,17 +204,22 @@ class AwsPublicBlockchainAdapter:
         for path in paths:
             filesystem_path = path.removeprefix("s3://") if path.startswith("s3://") else path
             if path.startswith("s3://") and hasattr(self.filesystem, "glob"):
-                dataset_paths.extend(self.filesystem.glob(f"{filesystem_path}/*.parquet"))
+                matched = self.filesystem.glob(f"{filesystem_path}/*.parquet")
+                if not matched and "/date=" not in path:
+                    matched = self.filesystem.glob(f"{filesystem_path}/date=*/*.parquet")
+                dataset_paths.extend(matched)
             else:
                 dataset_paths.append(filesystem_path)
         if not dataset_paths:
             raise FileNotFoundError(f"no Parquet files found for AWS partitions: {paths}")
         dataset = ds.dataset(dataset_paths, filesystem=self.filesystem, format="parquet")
         self._validate_columns(dataset.schema.names, contract)
-        expression = _build_filter_expression(ds, contract, filters)
-        table_data = dataset.to_table(filter=expression)
-        rows = table_data.to_pylist()
-        return _post_filter_rows(rows, contract, filters)
+        expression = _build_filter_expression(ds, contract, filters, dataset.schema)
+        scanner = dataset.scanner(filter=expression, batch_size=8192)
+        for record_batch in scanner.to_batches():
+            rows = _post_filter_rows(record_batch.to_pylist(), contract, filters)
+            if rows:
+                yield rows
 
     def _partition_paths(self, table: str, start_date: str | None, end_date: str | None) -> list[str]:
         if start_date is None and end_date is None:
@@ -266,7 +324,12 @@ def _aws_trace_address(value: Any) -> Any:
     return value
 
 
-def _build_filter_expression(dataset_module: Any, contract: AwsTableContract, filters: Mapping[str, Any]) -> Any:
+def _build_filter_expression(
+    dataset_module: Any,
+    contract: AwsTableContract,
+    filters: Mapping[str, Any],
+    schema: Any | None = None,
+) -> Any:
     expression = None
     if filters.get("start_block") is not None:
         expression = dataset_module.field(contract.block_column) >= filters["start_block"]
@@ -278,10 +341,18 @@ def _build_filter_expression(dataset_module: Any, contract: AwsTableContract, fi
         condition = dataset_module.field(contract.transaction_column).isin(transaction_hashes)
         expression = condition if expression is None else expression & condition
     addresses = [str(value).lower() for value in filters.get("addresses", ())]
-    if addresses:
-        address_expression = None
-        for condition in (dataset_module.field(column).isin(addresses) for column in contract.address_columns):
-            address_expression = condition if address_expression is None else address_expression | condition
+    address_columns = contract.address_columns
+    if schema is not None:
+        address_columns = tuple(
+            column
+            for column in address_columns
+            if column in schema.names and str(schema.field(column).type) != "null"
+        )
+    address_expression = None
+    for column in address_columns if addresses else ():
+        condition = dataset_module.field(column).isin(addresses)
+        address_expression = condition if address_expression is None else address_expression | condition
+    if address_expression is not None:
         expression = address_expression if expression is None else expression & address_expression
     return expression
 
@@ -304,7 +375,11 @@ def _post_filter_rows(rows: Iterable[Mapping[str, Any]], contract: AwsTableContr
             and str(row.get(contract.transaction_column, "")).lower() not in hashes
         ):
             continue
-        if addresses and not any(str(row.get(column, "")).lower() in addresses for column in contract.address_columns):
+        if (
+            addresses
+            and contract.address_columns
+            and not any(str(row.get(column, "")).lower() in addresses for column in contract.address_columns)
+        ):
             continue
         selected.append(dict(row))
     return selected
@@ -355,6 +430,7 @@ def normalize_aws_transaction_record(
         "gas": record.get("gas"),
         "gasPrice": _aws_quantity(record.get("gas_price"), "gas_price"),
         "nonce": record.get("nonce"),
+        "input": record.get("input", record.get("input_data", "0x")),
         "chainId": record.get("chain_id", 1),
         "source": "aws",
     }

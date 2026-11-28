@@ -17,7 +17,9 @@ from .d3_decoding import (
     unknown_record,
 )
 from .d3_flow import (
+    audit_flow_volume_by_token,
     build_balance_inputs,
+    build_flow_legs,
     classify_addresses,
     classify_transaction,
     validate_incident_leg_ownership,
@@ -208,12 +210,77 @@ def run_d3(
     decoded_calls, unknown_calls = _decode_call_records(event_id, transactions, abi_fallback)
     unknown_records = aggregate_unknown_records(unknown_events + unknown_calls)
 
+    decoded_events_by_tx: dict[str, list[dict[str, Any]]] = {}
+    for row in decoded_events:
+        decoded_events_by_tx.setdefault(str(row["tx_hash"]).lower(), []).append(row)
+    decoded_calls_by_tx: dict[str, list[dict[str, Any]]] = {}
+    for row in decoded_calls:
+        decoded_calls_by_tx.setdefault(str(row["tx_hash"]).lower(), []).append(row)
+
     exploit_hashes = {
         value
         for value in {str(event.get("exploit_tx_hash", "")).lower()}
         if value
     }
     exploit_hashes.update(str(leg.transaction_hash).lower() for leg in incident_legs)
+    protocol_addresses = {
+        str(address).lower()
+        for address in event.get("protocol_or_vulnerable_contracts", [])
+        if address
+    }
+    attack_addresses = {
+        str(address).lower()
+        for address in (
+            list(event.get("attack_contracts", []))
+            + list(event.get("attacker_addresses", []))
+        )
+        if address
+    }
+    core_addresses = protocol_addresses | {
+        str(leg.affected_address).lower()
+        for leg in incident_legs
+        if leg.affected_address
+    }
+    flow_scope_addresses = core_addresses | attack_addresses
+    role_by_address = {
+        **{address: "protocol" for address in protocol_addresses},
+        **{address: "attacker" for address in attack_addresses},
+        **{str(leg.actor_address).lower(): leg.role for leg in incident_legs},
+    }
+    recovery_hashes = {
+        str(leg.transaction_hash).lower()
+        for leg in incident_legs
+        if str(leg.role).strip().lower() in {"recovery", "protocol_recovery"}
+    }
+    flow_transaction_hashes = set(exploit_hashes) | recovery_hashes
+    flow_transaction_hashes.update(
+        str(log.get("tx_hash", "")).lower()
+        for log in logs
+        if str(log.get("address", "")).lower() in flow_scope_addresses
+    )
+    flow_transaction_hashes.update(
+        str(row.get("tx_hash", "")).lower()
+        for row in decoded_events + decoded_calls
+    )
+    flow_transaction_hashes.update(
+        str(transaction.get("tx_hash", "")).lower()
+        for transaction in transactions
+        if str(transaction.get("to_address", "")).lower() in flow_scope_addresses
+    )
+    scoped_transfers = [
+        transfer
+        for transfer in transfers
+        if str(transfer.get("tx_hash", "")).lower() in flow_transaction_hashes
+    ]
+    flow_legs = build_flow_legs(
+        scoped_transfers,
+        decoded_events_by_tx=decoded_events_by_tx,
+        decoded_calls_by_tx=decoded_calls_by_tx,
+        exploit_hashes=exploit_hashes,
+        recovery_hashes=recovery_hashes,
+        core_addresses=core_addresses,
+        role_by_address=role_by_address,
+    )
     classifications: list[dict[str, Any]] = []
     classification_by_tx: dict[str, dict[str, Any]] = {}
     for transaction in transactions:
@@ -240,9 +307,6 @@ def run_d3(
         classifications.append(row)
         classification_by_tx[tx_hash.lower()] = result
 
-    role_by_address = {
-        str(leg.actor_address).lower(): leg.role for leg in incident_legs
-    }
     actor_rows: list[dict[str, Any]] = []
     for transaction in transactions:
         addresses = [transaction.get("from_address"), transaction.get("to_address")]
@@ -288,19 +352,39 @@ def run_d3(
     leg_by_tx = {str(leg["transaction_hash"]).lower(): str(leg["leg_id"]) for leg in resolved_legs}
     actor_by_address = {row["address"]: row["actor_role"] for row in actor_rows}
     balance_rows = build_balance_inputs(
-        transfers,
+        scoped_transfers,
         classification_by_tx=classification_by_tx,
         actor_by_address=actor_by_address,
         leg_by_tx=leg_by_tx,
     )
 
+    flow_volume_audit = audit_flow_volume_by_token(flow_legs)
+    quality_checks = {
+        "decoded_activity_present": bool(decoded_events or decoded_calls),
+        "flow_legs_present": bool(flow_legs),
+        "flow_volume_audit_passed": bool(flow_volume_audit)
+        and all(item["passed"] for item in flow_volume_audit),
+    }
     report = {
-        "status": "GO",
+        "status": "GO" if all(quality_checks.values()) else "CONDITIONAL_GO",
         "event_id": event_id,
         "d2_gate_status": d2_report.get("status"),
+        "quality_checks": quality_checks,
+        "corrective_actions": [
+            check for check, passed in quality_checks.items() if not passed
+        ],
         "decoded_event_count": len(decoded_events),
         "decoded_call_count": len(decoded_calls),
         "unknown_event_count": len(unknown_records),
+        "flow_leg_count": len(flow_legs),
+        "token_transfer_count": len(transfers),
+        "scoped_token_transfer_count": len(scoped_transfers),
+        "excluded_unrelated_token_transfer_count": len(transfers) - len(scoped_transfers),
+        "flow_label_counts": {
+            label: sum(row["flow_label"] == label for row in flow_legs)
+            for label in sorted({row["flow_label"] for row in flow_legs})
+        },
+        "flow_volume_audit_by_token": flow_volume_audit,
         "exploit_transaction_count": len(exploit_hashes - {""}),
         "attribution_row_count": len(actor_rows),
         "incident_leg_validation": ownership,
@@ -311,6 +395,7 @@ def run_d3(
         staging = Path(temp)
         _write_parquet(decoded_events, "decoded_events", staging / "decoded_events.parquet")
         _write_parquet(decoded_calls, "decoded_calls", staging / "decoded_calls.parquet")
+        _write_parquet(flow_legs, "flow_legs", staging / "flow_legs.parquet")
         _write_parquet(classifications, "classified_transactions", staging / "classified_transactions.parquet")
         _write_parquet(actor_rows, "actor_roles", staging / "actor_roles.parquet")
         _write_parquet(resolved_legs, "incident_legs_resolved", staging / "incident_legs_resolved.parquet")

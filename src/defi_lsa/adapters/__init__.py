@@ -9,12 +9,14 @@ Exported adapters:
 from __future__ import annotations
 
 from .coingecko import CoinGeckoAdapter, PriceCoverageReport, calculate_price_coverage
+from .defillama import DefiLlamaAdapter
 from .discourse import DiscourseAdapter
 from .gdelt import GDELTAdapter
 from .protocol import ProtocolAnnouncementAdapter
 
 __all__ = [
     "CoinGeckoAdapter",
+    "DefiLlamaAdapter",
     "DiscourseAdapter",
     "GDELTAdapter",
     "ProtocolAnnouncementAdapter",

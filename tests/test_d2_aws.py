@@ -2,7 +2,9 @@ from defi_lsa.aws import (
     AWS_TABLE_CONTRACTS,
     AwsPublicBlockchainAdapter,
     AwsSchemaError,
+    estimate_block_date,
     filter_aws_records_by_scope,
+    _build_filter_expression,
     normalize_aws_block_record,
     normalize_aws_contract_record,
     normalize_aws_log_record,
@@ -22,6 +24,18 @@ def test_aws_partition_dates_are_expanded_deterministically():
         {"date": "2023-03-14"},
         {"date": "2023-03-15"},
     ]
+
+
+def test_estimate_block_date_and_partition_inference():
+    # Genesis and post-merge known dates
+    assert estimate_block_date(0).isoformat() == "2015-07-30"
+    assert estimate_block_date(15537393).isoformat() == "2022-09-15"
+    assert estimate_block_date(16818024).isoformat() == "2023-03-13"
+
+    adapter = AwsPublicBlockchainAdapter()
+    # When start_date and end_date are None, partition_paths infers from blocks in _fetch
+    paths = adapter._partition_paths("logs", "2023-03-13", "2023-03-13")
+    assert paths == ["s3://aws-public-blockchain/v1.0/eth/logs/date=2023-03-13"]
 
 
 def test_aws_query_seam_preserves_filters_and_table_contracts():
@@ -62,6 +76,49 @@ def test_aws_query_seam_preserves_filters_and_table_contracts():
     }
 
 
+def test_aws_batch_iterator_preserves_query_seam_rows():
+    rows = [{"number": 12}, {"number": 13}]
+    adapter = AwsPublicBlockchainAdapter(lambda *_: rows)
+
+    assert list(adapter.iter_table_batches("blocks", start_block=12, end_block=13)) == [rows]
+    assert adapter.fetch_table("blocks", start_block=12, end_block=13) == rows
+
+
+def test_arrow_batches_filter_nullable_address_columns():
+    import pytest
+
+    pa = pytest.importorskip("pyarrow")
+    ds = pytest.importorskip("pyarrow.dataset")
+    count = 10000
+    table = pa.table({
+        "transaction_hash": [f"0x{index:064x}" for index in range(count)],
+        "trace_address": ["[]"] * count,
+        "block_number": pa.array([16818024] * count, type=pa.int64()),
+        "from_address": pa.array(
+            ["0xabc" if index % 2 == 0 else None for index in range(count)],
+            type=pa.string(),
+        ),
+        "to_address": pa.nulls(count),
+        "value": pa.array([0] * count, type=pa.int64()),
+    })
+    dataset = ds.dataset(table)
+    filters = {
+        "start_block": 16818024,
+        "end_block": 16818024,
+        "addresses": ["0xabc"],
+    }
+    expression = _build_filter_expression(
+        ds, AWS_TABLE_CONTRACTS["traces"], filters, dataset.schema
+    )
+    batch_sizes = [
+        len(batch)
+        for batch in dataset.scanner(filter=expression, batch_size=8192).to_batches()
+    ]
+
+    assert sum(batch_sizes) == count // 2
+    assert max(batch_sizes) <= 8192
+
+
 def test_aws_block_filter_ignores_transaction_hash_without_block_column():
     row = {
         "number": 18630392,
@@ -97,6 +154,21 @@ def test_aws_transaction_filter_uses_transaction_hash_column():
         AWS_TABLE_CONTRACTS["transactions"],
         {"transaction_hashes": [matching["hash"]]},
     ) == [matching]
+
+
+def test_aws_block_filter_ignores_address_scope():
+    block = {
+        "number": 12,
+        "timestamp": 1678708800,
+        "gas_used": 1,
+        "hash": "0x" + "a" * 64,
+    }
+
+    assert _post_filter_rows(
+        [block],
+        AWS_TABLE_CONTRACTS["blocks"],
+        {"start_block": 12, "end_block": 12, "addresses": ["0x" + "3" * 40]},
+    ) == [block]
 
 
 def test_aws_scope_filter_matches_sender_recipient_or_emitter():
@@ -159,6 +231,26 @@ def test_aws_rows_use_canonical_record_shapes():
     assert block["source"] == "aws"
     assert transaction["record_key"] == "0x" + "b" * 64
     assert log["record_key"] == f"1:0x{'b' * 64}:0"
+
+
+def test_aws_transaction_normalization_preserves_input_data():
+    transaction = normalize_aws_transaction_record(
+        {
+            "hash": "0x" + "b" * 64,
+            "block_number": 12,
+            "from_address": "0x" + "1" * 40,
+            "to_address": "0x" + "2" * 40,
+            "value": 0,
+            "gas": 21000,
+            "gas_price": 1,
+            "nonce": 0,
+            "input": "0x12345678abcd",
+        },
+        "event",
+        "c" * 64,
+    )
+
+    assert transaction["input_data"] == "0x12345678abcd"
 
 
 def test_aws_extended_rows_preserve_exact_values_and_identity():
